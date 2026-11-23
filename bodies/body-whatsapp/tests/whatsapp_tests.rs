@@ -1,17 +1,19 @@
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use body_whatsapp::{
-    CAP_CHAT_DELETE, CAP_CHAT_EDIT, CAP_CHAT_MARK_READ, CAP_CHAT_REACT, CAP_CHAT_SEND_MEDIA,
-    CAP_CHAT_SEND_POLL, CAP_CHAT_SEND_STICKER, CAP_CHAT_SPEAK, CAP_CHAT_TYPING,
-    DEFAULT_BUBBLE_CAP, DEFAULT_SYSTEM_PLACE, INLINE_ATTACHMENT_CAP_BYTES, InboundTranslator,
-    MediaKind, MemoryBlobLookup, MemoryBlobStager, OfflineWhatsAppTransport,
-    RecordedOutboundAction, WhatsAppBody, default_body_id, default_system_place, jid_to_actor,
-    jid_to_place,
+    CAP_APPROVAL_PROMPT, CAP_CHAT_DELETE, CAP_CHAT_EDIT, CAP_CHAT_MARK_READ, CAP_CHAT_REACT,
+    CAP_CHAT_SEND_MEDIA, CAP_CHAT_SEND_POLL, CAP_CHAT_SEND_STICKER, CAP_CHAT_SPEAK,
+    CAP_CHAT_TYPING, DEFAULT_BUBBLE_CAP, DEFAULT_SYSTEM_PLACE, INLINE_ATTACHMENT_CAP_BYTES,
+    InboundAction, InboundTranslator, MediaKind, MemoryBlobLookup, MemoryBlobStager,
+    OfflineWhatsAppTransport, PendingApprovalBinding, PendingApprovalPromptMap,
+    RecordedOutboundAction, WhatsAppBody, WhatsAppPluginConfig, default_body_id,
+    default_system_place, jid_to_actor, jid_to_place,
 };
 use monoagens_body_kit::{EchoRegistry, PersistentBodyRuntime};
 use monoagens_body_sdk::{
@@ -77,7 +79,7 @@ fn inbound_msg(
 }
 
 #[test]
-fn discover_returns_all_9_sorted_capabilities_with_hashes() {
+fn discover_returns_all_10_sorted_capabilities_with_hashes() {
     let mut body = WhatsAppBody::offline(default_body_id());
     let d1 = body
         .discover(BodyDiscoverParams {
@@ -95,7 +97,7 @@ fn discover_returns_all_9_sorted_capabilities_with_hashes() {
     assert_eq!(d1, d2);
     assert_eq!(d1.protocol_version, CURRENT_PROTOCOL_VERSION);
     assert_eq!(d1.places, vec![default_system_place()]);
-    assert_eq!(d1.capabilities.len(), 9);
+    assert_eq!(d1.capabilities.len(), 10);
 
     let mut sorted = d1.capabilities.clone();
     sort_capabilities(&mut sorted);
@@ -105,6 +107,7 @@ fn discover_returns_all_9_sorted_capabilities_with_hashes() {
     assert_eq!(
         ids,
         vec![
+            CAP_APPROVAL_PROMPT,
             CAP_CHAT_DELETE,
             CAP_CHAT_EDIT,
             CAP_CHAT_MARK_READ,
@@ -1009,4 +1012,436 @@ fn runtime_enforces_idempotency_crash_journal_isolation_errors_and_blobs() {
         peer_expertise_margin: None,
     };
     assert!(body2.on_percept(foreign_percept).is_err());
+}
+
+#[test]
+fn plugin_config_auto_generates_and_reloads_customized_emojis_and_state_dir() {
+    let dir = TempDir::new().unwrap();
+    let cfg_path = dir.path().join("plugins").join("whatsapp.toml");
+    let state_dir = dir.path().join("state");
+
+    // 1. First run via load_or_init_at writes commented default whatsapp.toml
+    assert!(!cfg_path.exists());
+    let cfg1 = WhatsAppPluginConfig::load_or_init_at(&cfg_path).unwrap();
+    assert!(cfg_path.exists());
+    assert_eq!(cfg1, WhatsAppPluginConfig::default());
+    assert_eq!(cfg1.version, 1);
+    assert!(cfg1.auto_typing_on_speak);
+    assert!(!cfg1.auto_mark_read);
+    assert_eq!(cfg1.history_grace_secs, 15);
+    assert_eq!(cfg1.approve_emojis, vec!["👍", "✅"]);
+    assert_eq!(cfg1.deny_emojis, vec!["👎", "❌"]);
+
+    // Generated TOML parses back cleanly as default
+    let raw_generated = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(raw_generated.contains("approve_emojis"));
+    assert_eq!(
+        toml::from_str::<WhatsAppPluginConfig>(&raw_generated).unwrap(),
+        WhatsAppPluginConfig::default()
+    );
+
+    // 2. Customize whatsapp.toml and reload on second run
+    let customized = r#"
+version = 1
+auto_typing_on_speak = false
+auto_mark_read = true
+history_grace_secs = 30
+approve_emojis = ["🚀", "🆗"]
+deny_emojis = ["🛑", "🚫"]
+"#;
+    std::fs::write(&cfg_path, customized).unwrap();
+    let cfg2 = WhatsAppPluginConfig::load_or_init_at(&cfg_path).unwrap();
+    assert!(!cfg2.auto_typing_on_speak);
+    assert!(cfg2.auto_mark_read);
+    assert_eq!(cfg2.history_grace_secs, 30);
+    assert_eq!(cfg2.approve_emojis, vec!["🚀", "🆗"]);
+    assert_eq!(cfg2.deny_emojis, vec!["🛑", "🚫"]);
+
+    // 3. End-to-end binary launch with MONOAGENS_PLUGIN_CONFIG & MONOAGENS_PLUGIN_STATE_DIR:
+    //    - auto-generates config file on first run
+    //    - honors MONOAGENS_PLUGIN_STATE_DIR for PersistentBodyRuntime state file
+    //    - stdout remains strictly NDJSON Waist-2 frames only
+    let bin_cfg_path = dir.path().join("env-run").join("whatsapp.toml");
+    let discover_req = Waist2Request::new(
+        Some(RpcId::Int(1)),
+        Waist2Method::BodyDiscover,
+        BodyDiscoverParams {
+            headers: Waist2Headers::new("env-disc-1"),
+            body_id: None,
+        },
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_body-whatsapp"))
+        .env("MONOAGENS_PLUGIN_CONFIG", &bin_cfg_path)
+        .env("MONOAGENS_PLUGIN_STATE_DIR", &state_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "{}", serde_json::to_string(&discover_req).unwrap()).unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(bin_cfg_path.exists());
+    assert!(state_dir.join("waist2_body_state.json").exists());
+
+    let stdout_str = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout_str.lines().collect();
+    assert_eq!(lines.len(), 1);
+    let resp: Waist2Response<Value> = serde_json::from_str(lines[0]).unwrap();
+    assert!(resp.error.is_none());
+    assert_eq!(
+        resp.result.unwrap()["capabilities"].as_array().unwrap().len(),
+        10
+    );
+}
+
+#[test]
+fn approval_prompt_renders_instructions_and_binds_message_id() {
+    let custom_cfg = WhatsAppPluginConfig {
+        approve_emojis: vec!["🚀".to_owned(), "👌".to_owned()],
+        deny_emojis: vec!["🛑".to_owned()],
+        ..WhatsAppPluginConfig::default()
+    };
+    let mut body = WhatsAppBody::offline(default_body_id()).with_config(custom_cfg);
+    body.set_now_ms(1_700_000_500_000);
+
+    // 1. Default configured emojis (customized via WhatsAppPluginConfig)
+    let payload = json!({
+        "action_id": "act-approve-1",
+        "h_act": "blake3:act-hash-1",
+        "state_epoch": 7,
+        "capability_id": "fs.write",
+        "target_places": ["fs:/tmp/demo.txt"],
+        "summary": "Write 42 bytes to /tmp/demo.txt",
+        "expires_at_ms": 1_700_000_560_000u64
+    });
+    let res = body
+        .execute(exec_params(
+            "act-prompt-1",
+            CAP_APPROVAL_PROMPT,
+            "wa:group:1203630123456@g.us",
+            serde_json::to_vec(&payload).unwrap(),
+        ))
+        .unwrap();
+    assert!(res.accepted);
+    let receipt = res.receipt.unwrap();
+    assert_eq!(receipt.outcome, ReceiptOutcome::Done);
+    let detail: Value = serde_json::from_str(receipt.detail.as_deref().unwrap()).unwrap();
+    let prompt_msg_id = detail["prompt_message_id"].as_str().unwrap().to_owned();
+    assert_eq!(prompt_msg_id, "wa-offline-msg-1");
+    assert!(body.echo_registry().is_self_echo(&prompt_msg_id));
+
+    match &body.transport().recorded[0] {
+        RecordedOutboundAction::Text { chat, text, .. } => {
+            assert_eq!(chat, "1203630123456@g.us");
+            assert!(text.contains("act-approve-1"));
+            assert!(text.contains("fs.write"));
+            assert!(text.contains("Write 42 bytes to /tmp/demo.txt"));
+            assert!(text.contains("fs:/tmp/demo.txt"));
+            assert!(text.contains("React 🚀 / 👌 to approve or 🛑 to deny."));
+        }
+        other => panic!("expected Text outbound action, got {other:?}"),
+    }
+
+    let binding = body
+        .pending_approvals()
+        .get(&prompt_msg_id)
+        .expect("prompt message_id must be bound");
+    assert_eq!(
+        binding,
+        &PendingApprovalBinding {
+            action_id: "act-approve-1".to_owned(),
+            h_act: "blake3:act-hash-1".to_owned(),
+            state_epoch: 7,
+            approve_emojis: vec!["🚀".to_owned(), "👌".to_owned()],
+            deny_emojis: vec!["🛑".to_owned()],
+            expires_at_ms: 1_700_000_560_000,
+        }
+    );
+
+    // 2. Per-request emoji override
+    let override_payload = json!({
+        "action_id": "act-approve-2",
+        "h_act": "blake3:act-hash-2",
+        "state_epoch": 8,
+        "capability_id": "shell.exec",
+        "summary": "Run diagnostic script",
+        "expires_at_ms": 1_700_000_590_000u64,
+        "approve_emojis": ["👍", "✅"],
+        "deny_emojis": ["👎", "❌"]
+    });
+    let res2 = body
+        .execute(exec_params(
+            "act-prompt-2",
+            CAP_APPROVAL_PROMPT,
+            "wa:dm:6281111111@s.whatsapp.net",
+            serde_json::to_vec(&override_payload).unwrap(),
+        ))
+        .unwrap();
+    assert_eq!(res2.receipt.unwrap().outcome, ReceiptOutcome::Done);
+    match &body.transport().recorded[1] {
+        RecordedOutboundAction::Text { text, .. } => {
+            assert!(text.contains("React 👍 / ✅ to approve or 👎 / ❌ to deny."));
+        }
+        other => panic!("expected Text outbound action, got {other:?}"),
+    }
+
+    // 3. Invalid payload refused
+    let bad_res = body
+        .execute(exec_params(
+            "act-prompt-bad",
+            CAP_APPROVAL_PROMPT,
+            "wa:dm:6281111111@s.whatsapp.net",
+            serde_json::to_vec(&json!({
+                "action_id": "",
+                "h_act": "blake3:x",
+                "state_epoch": 1,
+                "capability_id": "chat.speak",
+                "summary": "empty action_id",
+                "expires_at_ms": 100
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    assert!(!bad_res.accepted);
+    assert_eq!(bad_res.receipt.unwrap().outcome, ReceiptOutcome::Refused);
+
+    // 4. Bounded FIFO eviction on PendingApprovalPromptMap
+    let mut bounded = PendingApprovalPromptMap::new(2);
+    for idx in 1..=3 {
+        bounded.insert(
+            format!("msg-{idx}"),
+            PendingApprovalBinding {
+                action_id: format!("act-{idx}"),
+                h_act: format!("h-{idx}"),
+                state_epoch: idx,
+                approve_emojis: vec!["👍".to_owned()],
+                deny_emojis: vec!["👎".to_owned()],
+                expires_at_ms: 999,
+            },
+        );
+    }
+    assert_eq!(bounded.len(), 2);
+    assert!(bounded.get("msg-1").is_none());
+    assert!(bounded.get("msg-2").is_some());
+    assert!(bounded.get("msg-3").is_some());
+}
+
+#[test]
+fn inbound_reaction_translates_bound_approval_prompts_and_preserves_normal_reactions() {
+    let boot_ms = 1_700_000_600_000u64;
+    let mut body = WhatsAppBody::offline(default_body_id());
+    body.set_now_ms(boot_ms + 100);
+
+    // Dispatch approval.prompt with default emojis (👍/✅ approve, 👎/❌ deny)
+    let prompt_res = body
+        .execute(exec_params(
+            "act-prompt-rx",
+            CAP_APPROVAL_PROMPT,
+            "wa:group:1203630123456@g.us",
+            serde_json::to_vec(&json!({
+                "action_id": "act-held-42",
+                "h_act": "blake3:held-42",
+                "state_epoch": 12,
+                "capability_id": "net.fetch",
+                "summary": "Fetch external webhook",
+                "expires_at_ms": boot_ms + 60_000
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let detail: Value =
+        serde_json::from_str(prompt_res.receipt.unwrap().detail.as_deref().unwrap()).unwrap();
+    let prompt_msg_id = detail["prompt_message_id"].as_str().unwrap().to_owned();
+
+    let mut translator = InboundTranslator::new(boot_ms);
+    let mut stager = MemoryBlobStager::default();
+
+    let make_reaction = |id: &str, sender: &str, target_id: &str, emoji: &str, ts_offset: u64| {
+        inbound_msg(
+            id,
+            "1203630123456@g.us",
+            sender,
+            true,
+            false,
+            (boot_ms + ts_offset) as i64,
+            wa::Message {
+                reaction_message: buffa::MessageField::some(wa::message::ReactionMessage {
+                    key: buffa::MessageField::some(wa::MessageKey {
+                        id: Some(target_id.to_owned()),
+                        ..Default::default()
+                    }),
+                    text: Some(emoji.to_owned()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+    };
+
+    // 1. Approve with 👍 and ✅ (with device suffix normalized to bare JID)
+    for (idx, emoji) in ["👍", "✅"].iter().enumerate() {
+        let rx = make_reaction(
+            &format!("rx-app-{idx}"),
+            "6281111111:5@s.whatsapp.net",
+            &prompt_msg_id,
+            emoji,
+            1_000 + idx as u64,
+        );
+        let (transport, echo_reg, pending) = body.inbound_context_mut();
+        let action = translator
+            .translate_inbound_action(
+                &rx,
+                transport,
+                echo_reg,
+                pending,
+                &mut stager,
+                format!("k-app-{idx}"),
+            )
+            .expect("approve reaction should translate");
+        match action {
+            InboundAction::ApprovalResolve(resolve) => {
+                assert!(resolve.approved);
+                assert_eq!(resolve.action_id, ActionId::new("act-held-42"));
+                assert_eq!(resolve.h_act, HAct::new("blake3:held-42"));
+                assert_eq!(resolve.state_epoch, 12);
+                assert_eq!(
+                    resolve.resolver,
+                    ActorId::new("wa:user:6281111111@s.whatsapp.net")
+                );
+                assert_eq!(
+                    resolve.resolved_at_ms,
+                    Time::from_millis(boot_ms + 1_000 + idx as u64)
+                );
+            }
+            other => panic!("expected ApprovalResolve, got {other:?}"),
+        }
+    }
+
+    // 2. Deny with 👎 and ❌
+    for (idx, emoji) in ["👎", "❌"].iter().enumerate() {
+        let rx = make_reaction(
+            &format!("rx-deny-{idx}"),
+            "6282222222:2@s.whatsapp.net",
+            &prompt_msg_id,
+            emoji,
+            2_000 + idx as u64,
+        );
+        let (transport, echo_reg, pending) = body.inbound_context_mut();
+        let action = translator
+            .translate_inbound_action(
+                &rx,
+                transport,
+                echo_reg,
+                pending,
+                &mut stager,
+                format!("k-deny-{idx}"),
+            )
+            .expect("deny reaction should translate");
+        match action {
+            InboundAction::ApprovalResolve(resolve) => {
+                assert!(!resolve.approved);
+                assert_eq!(resolve.action_id, ActionId::new("act-held-42"));
+                assert_eq!(resolve.h_act, HAct::new("blake3:held-42"));
+                assert_eq!(resolve.state_epoch, 12);
+                assert_eq!(
+                    resolve.resolver,
+                    ActorId::new("wa:user:6282222222@s.whatsapp.net")
+                );
+            }
+            other => panic!("expected ApprovalResolve, got {other:?}"),
+        }
+    }
+
+    // 3. Unrelated emoji on approval prompt -> normal percept/emit
+    let unrelated = make_reaction(
+        "rx-other",
+        "6281111111@s.whatsapp.net",
+        &prompt_msg_id,
+        "😂",
+        3_000,
+    );
+    let (transport, echo_reg, pending) = body.inbound_context_mut();
+    match translator
+        .translate_inbound_action(
+            &unrelated,
+            transport,
+            echo_reg,
+            pending,
+            &mut stager,
+            "k-other",
+        )
+        .unwrap()
+    {
+        InboundAction::PerceptEmit(percept) => {
+            let p_json: Value = serde_json::from_slice(percept.payload.as_bytes()).unwrap();
+            assert_eq!(p_json["type"], "reaction");
+            assert_eq!(p_json["emoji"], "😂");
+        }
+        other => panic!("expected PerceptEmit, got {other:?}"),
+    }
+
+    // 4. Empty emoji (reaction removal) on approval prompt -> normal percept/emit
+    let removed = make_reaction(
+        "rx-rm",
+        "6281111111@s.whatsapp.net",
+        &prompt_msg_id,
+        "",
+        3_100,
+    );
+    let (transport, echo_reg, pending) = body.inbound_context_mut();
+    match translator
+        .translate_inbound_action(
+            &removed,
+            transport,
+            echo_reg,
+            pending,
+            &mut stager,
+            "k-rm",
+        )
+        .unwrap()
+    {
+        InboundAction::PerceptEmit(percept) => {
+            let p_json: Value = serde_json::from_slice(percept.payload.as_bytes()).unwrap();
+            assert_eq!(p_json["type"], "reaction");
+            assert_eq!(p_json["removed"], true);
+        }
+        other => panic!("expected PerceptEmit, got {other:?}"),
+    }
+
+    // 5. Reaction with 👍 on a non-approval message -> normal percept/emit
+    let normal = make_reaction(
+        "rx-normal",
+        "6281111111@s.whatsapp.net",
+        "some-other-message-id",
+        "👍",
+        3_200,
+    );
+    let (transport, echo_reg, pending) = body.inbound_context_mut();
+    match translator
+        .translate_inbound_action(
+            &normal,
+            transport,
+            echo_reg,
+            pending,
+            &mut stager,
+            "k-normal",
+        )
+        .unwrap()
+    {
+        InboundAction::PerceptEmit(percept) => {
+            let p_json: Value = serde_json::from_slice(percept.payload.as_bytes()).unwrap();
+            assert_eq!(p_json["type"], "reaction");
+            assert_eq!(p_json["emoji"], "👍");
+            assert_eq!(p_json["target_message_id"], "some-other-message-id");
+        }
+        other => panic!("expected PerceptEmit, got {other:?}"),
+    }
 }

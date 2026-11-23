@@ -26,6 +26,7 @@ use crate::quiet_hours::{
     DigestBatch, DigestItem, DigestQueue, ProactiveCapTracker, ProactiveEvaluation,
     evaluate_proactive_notification,
 };
+use crate::rbac::{RbacConfig, RbacDecision};
 use crate::reason_tags::{ValveReasonTag, build_valve_self_snapshot};
 use crate::roles::compile_attested_roles;
 use crate::snapshot::{MemoryWriteRequest, ValveSnapshot};
@@ -116,6 +117,37 @@ impl Valve {
     #[must_use]
     pub fn config(&self) -> &ValveConfig {
         &self.config
+    }
+
+    /// Returns the configured [`RbacConfig`], if any.
+    #[must_use]
+    pub fn rbac_config(&self) -> Option<&RbacConfig> {
+        self.config.rbac.as_ref()
+    }
+
+    /// Evaluates generic RBAC narrowing for `(actor, place, capability_or_permission)`.
+    ///
+    /// Returns [`RbacDecision::Allow`] when `ValveMode::Off`, `!config.rbac_enabled`, or no
+    /// [`RbacConfig`] is configured.
+    #[must_use]
+    pub fn check_rbac(
+        &self,
+        actor: &ActorId,
+        place: Option<&PlaceId>,
+        capability_or_permission: &str,
+    ) -> RbacDecision {
+        if self.config.mode == ValveMode::Off || !self.config.rbac_enabled {
+            return RbacDecision::Allow;
+        }
+        let Some(rbac) = &self.config.rbac else {
+            return RbacDecision::Allow;
+        };
+        rbac.evaluate_with_optional_owner(
+            actor,
+            self.snapshot.owner_actor_id.as_ref(),
+            place,
+            capability_or_permission,
+        )
     }
 
     /// Returns the effective turn taint `tau_turn` combined from snapshot, inbound, and context.
@@ -852,9 +884,21 @@ impl Valve {
         };
 
         let is_trusted_owner_chain = effective_taint == Taint::Trusted && roles.is_owner;
+        let rbac_decision = if self.config.is_rule_active(ValveRuleToggle::Rbac) {
+            self.config.rbac.as_ref().map(|rbac| {
+                rbac.evaluate_with_optional_owner(
+                    &actor,
+                    self.snapshot.owner_actor_id.as_ref(),
+                    action.places.first(),
+                    action.capability_id.as_str(),
+                )
+            })
+        } else {
+            None
+        };
 
-        if self.config.is_rule_active(ValveRuleToggle::TaintBlocking) {
-            match check_action_under_taint(
+        let taint_check = if self.config.is_rule_active(ValveRuleToggle::TaintBlocking) {
+            Some(check_action_under_taint(
                 effective_taint,
                 tier,
                 risk_meta.is_procedure_write,
@@ -862,46 +906,23 @@ impl Valve {
                 cross_audience,
                 has_valid_declass,
                 has_valid_grant,
-            ) {
-                TaintActionCheck::Allow => {}
-                TaintActionCheck::RefuseCrossAudience => {
-                    return (
-                        DoorDecision::Refuse {
-                            rule: "valve.taint.cross_audience".to_owned(),
-                            reason: ValveReasonTag::TaintBlocked.as_str().to_owned(),
-                        },
-                        Some(ValveReasonTag::TaintBlocked),
-                        "valve.taint.cross_audience".to_owned(),
-                    );
-                }
-                TaintActionCheck::RequireApproval => {
-                    if self.config.is_rule_active(ValveRuleToggle::PendingApproval) {
-                        let (dec, tag) = self.approvals.try_hold(
-                            action,
-                            computed_h_act,
-                            HoldRequestContext {
-                                state_epoch: self.snapshot.state_epoch,
-                                t_now: self.snapshot.t_now,
-                                is_embodied,
-                                reason_tag: ValveReasonTag::TaintBlocked,
-                                is_trusted_owner_chain,
-                            },
-                            &self.config,
-                        );
-                        let rule = decision_rule_name(&dec, "valve.taint.quarantine");
-                        return (dec, Some(tag), rule);
-                    }
-                    return (
-                        DoorDecision::Refuse {
-                            rule: "valve.taint.quarantine".to_owned(),
-                            reason: ValveReasonTag::TaintBlocked.as_str().to_owned(),
-                        },
-                        Some(ValveReasonTag::TaintBlocked),
-                        "valve.taint.quarantine".to_owned(),
-                    );
-                }
-            }
-        } else if unauthorized_cross_audience {
+            ))
+        } else {
+            None
+        };
+
+        if matches!(taint_check, Some(TaintActionCheck::RefuseCrossAudience)) {
+            return (
+                DoorDecision::Refuse {
+                    rule: "valve.taint.cross_audience".to_owned(),
+                    reason: ValveReasonTag::TaintBlocked.as_str().to_owned(),
+                },
+                Some(ValveReasonTag::TaintBlocked),
+                "valve.taint.cross_audience".to_owned(),
+            );
+        }
+
+        if taint_check.is_none() && unauthorized_cross_audience {
             return (
                 DoorDecision::Refuse {
                     rule: "valve.action.cross_audience".to_owned(),
@@ -912,18 +933,61 @@ impl Valve {
             );
         }
 
-        if self.config.is_rule_active(ValveRuleToggle::PendingApproval) && tier >= RiskTier::R2 {
+        if tier == RiskTier::R3 && flags.identity_changing && !roles.is_owner {
+            return (
+                DoorDecision::Refuse {
+                    rule: "valve.action.line1".to_owned(),
+                    reason: ValveReasonTag::NonOwnerIdentityChange.as_str().to_owned(),
+                },
+                Some(ValveReasonTag::NonOwnerIdentityChange),
+                "valve.action.line1".to_owned(),
+            );
+        }
+
+        if let Some(RbacDecision::Deny { reason }) = rbac_decision {
+            return (
+                DoorDecision::Refuse {
+                    rule: "valve.action.rbac".to_owned(),
+                    reason,
+                },
+                Some(ValveReasonTag::CedarDenied),
+                "valve.action.rbac".to_owned(),
+            );
+        }
+
+        if matches!(taint_check, Some(TaintActionCheck::RequireApproval)) {
+            if self.config.is_rule_active(ValveRuleToggle::PendingApproval) {
+                let (dec, tag) = self.approvals.try_hold(
+                    action,
+                    computed_h_act,
+                    HoldRequestContext {
+                        state_epoch: self.snapshot.state_epoch,
+                        t_now: self.snapshot.t_now,
+                        is_embodied,
+                        reason_tag: ValveReasonTag::TaintBlocked,
+                        is_trusted_owner_chain,
+                    },
+                    &self.config,
+                );
+                let rule = decision_rule_name(&dec, "valve.taint.quarantine");
+                return (dec, Some(tag), rule);
+            }
+            return (
+                DoorDecision::Refuse {
+                    rule: "valve.taint.quarantine".to_owned(),
+                    reason: ValveReasonTag::TaintBlocked.as_str().to_owned(),
+                },
+                Some(ValveReasonTag::TaintBlocked),
+                "valve.taint.quarantine".to_owned(),
+            );
+        }
+
+        let requires_rbac_hold = matches!(rbac_decision, Some(RbacDecision::Hold { .. }));
+        if self.config.is_rule_active(ValveRuleToggle::PendingApproval)
+            && (tier >= RiskTier::R2 || requires_rbac_hold)
+        {
             if has_valid_grant {
                 self.approvals.consume_grant(&computed_h_act);
-            } else if tier == RiskTier::R3 && flags.identity_changing && !roles.is_owner {
-                return (
-                    DoorDecision::Refuse {
-                        rule: "valve.action.line1".to_owned(),
-                        reason: ValveReasonTag::NonOwnerIdentityChange.as_str().to_owned(),
-                    },
-                    Some(ValveReasonTag::NonOwnerIdentityChange),
-                    "valve.action.line1".to_owned(),
-                );
             } else {
                 let (dec, tag) = self.approvals.try_hold(
                     action,
@@ -940,6 +1004,15 @@ impl Valve {
                 let rule = decision_rule_name(&dec, "valve.approval.pending");
                 return (dec, Some(tag), rule);
             }
+        } else if requires_rbac_hold {
+            return (
+                DoorDecision::Refuse {
+                    rule: "valve.action.rbac_hold_disabled".to_owned(),
+                    reason: ValveReasonTag::PendingApproval.as_str().to_owned(),
+                },
+                Some(ValveReasonTag::PendingApproval),
+                "valve.action.rbac_hold_disabled".to_owned(),
+            );
         } else if has_valid_grant {
             self.approvals.consume_grant(&computed_h_act);
         }

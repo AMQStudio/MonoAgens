@@ -40,7 +40,7 @@ pub struct Cli {
 pub enum Commands {
     /// Boot Gateway + Valve + body-cli for interactive or single-message chat.
     Chat(ChatArgs),
-    /// Run a long-lived Gateway daemon connected to configured `[[bodies]]` plugins.
+    /// Run a long-lived Gateway daemon connected to configured plugins (`[plugins.<id>]` / `[[bodies]]`).
     Serve(ServeArgs),
     /// Query event logs or explain a single gate decision (`--explain <id>`).
     Log(LogArgs),
@@ -91,10 +91,10 @@ pub struct ServeArgs {
     /// Optional neural controller `.safetensors` model override (`soul.model_path`).
     #[arg(long)]
     pub model: Option<PathBuf>,
-    /// Connect only the specified `[[bodies]]` config id(s); repeatable.
-    #[arg(long = "body")]
+    /// Connect only the specified `[plugins.<id>]` / `[[bodies]]` config id(s); repeatable.
+    #[arg(long = "plugin", alias = "body")]
     pub bodies: Vec<String>,
-    /// Allow starting the daemon with zero configured or selected `[[bodies]]`.
+    /// Allow starting the daemon with zero configured or selected plugins/`[[bodies]]`.
     #[arg(long)]
     pub allow_empty: bool,
     /// Optional bounded runtime duration in milliseconds before graceful shutdown.

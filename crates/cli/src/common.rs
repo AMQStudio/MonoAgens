@@ -23,6 +23,7 @@ pub(crate) fn build_valve_config(cfg: &GatewayConfig) -> ValveConfig {
         },
         max_chain_wakes: cfg.valve.max_chain_wakes,
         daily_token_budget: cfg.model.daily_token_budget,
+        rbac: cfg.rbac.clone(),
         ..ValveConfig::default()
     }
 }

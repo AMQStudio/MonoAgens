@@ -1,14 +1,15 @@
 //! Inbound WhatsApp event translation, history/pre-boot filtering, self-echo
 //! suppression, group audience caching, poll vote decryption, and attachment staging.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use monoagens_body_kit::EchoRegistry;
 use monoagens_body_sdk::{
-    ActorId, AttachmentHandle, Audience, BlobPutResult, ChannelId, CorrelationId, ModalitySlot,
-    OpaquePayload, OriginActor, PerceptEmitParams, Taint, Time, Waist2Headers, sha256_hex,
+    ActionId, ActorId, ApprovalResolveParams, AttachmentHandle, Audience, BlobPutResult, ChannelId,
+    CorrelationId, HAct, ModalitySlot, OpaquePayload, OriginActor, PerceptEmitParams, Taint, Time,
+    Waist2Headers, sha256_hex,
 };
 use serde_json::{Value, json};
 use whatsapp_rust::wacore::poll::{
@@ -124,7 +125,97 @@ impl PollSecretCache {
     }
 }
 
-/// Translates live `whatsapp-rust` [`InboundMessage`]s into Waist-2 `percept/emit` payloads.
+/// Default maximum number of pending `approval.prompt` message bindings retained in memory.
+pub const DEFAULT_MAX_PENDING_APPROVALS: usize = 1_024;
+
+/// Bound approval metadata associated with a sent WhatsApp `approval.prompt` message ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApprovalBinding {
+    pub action_id: String,
+    pub h_act: String,
+    pub state_epoch: u64,
+    pub approve_emojis: Vec<String>,
+    pub deny_emojis: Vec<String>,
+    pub expires_at_ms: u64,
+}
+
+/// Bounded FIFO map from WhatsApp `prompt_message_id` to [`PendingApprovalBinding`].
+///
+/// Bindings are kept non-destructively across reactions so a non-owner reaction does not
+/// consume the prompt before the owner reacts; Gateway/Valve enforces single settlement.
+#[derive(Debug, Clone)]
+pub struct PendingApprovalPromptMap {
+    capacity: usize,
+    order: VecDeque<String>,
+    bindings: HashMap<String, PendingApprovalBinding>,
+}
+
+impl Default for PendingApprovalPromptMap {
+    fn default() -> Self {
+        Self::new(DEFAULT_MAX_PENDING_APPROVALS)
+    }
+}
+
+impl PendingApprovalPromptMap {
+    /// Creates a bounded [`PendingApprovalPromptMap`] retaining at most `capacity` entries.
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::new(),
+            bindings: HashMap::new(),
+        }
+    }
+
+    /// Binds `message_id` to `binding`, evicting the oldest entry if `capacity` is reached.
+    pub fn insert(&mut self, message_id: impl Into<String>, binding: PendingApprovalBinding) {
+        if self.capacity == 0 {
+            return;
+        }
+        let message_id = message_id.into();
+        if let Some(existing) = self.bindings.get_mut(&message_id) {
+            *existing = binding;
+            return;
+        }
+        while self.bindings.len() >= self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.bindings.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        self.order.push_back(message_id.clone());
+        self.bindings.insert(message_id, binding);
+    }
+
+    /// Looks up the [`PendingApprovalBinding`] for a WhatsApp `message_id`.
+    #[must_use]
+    pub fn get(&self, message_id: &str) -> Option<&PendingApprovalBinding> {
+        self.bindings.get(message_id)
+    }
+
+    /// Returns the number of tracked approval prompt bindings.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bindings.len()
+    }
+
+    /// Returns `true` when no approval prompts are currently tracked.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+}
+
+/// Outbound Waist-2 frame produced from an inbound WhatsApp message.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InboundAction {
+    PerceptEmit(Box<PerceptEmitParams>),
+    ApprovalResolve(ApprovalResolveParams),
+}
+
+/// Translates live `whatsapp-rust` [`InboundMessage`]s into Waist-2 `percept/emit` or
+/// `approval/resolve` payloads.
 #[derive(Debug)]
 pub struct InboundTranslator {
     boot_timestamp_ms: u64,
@@ -169,6 +260,31 @@ impl InboundTranslator {
         blob_stager: &mut dyn BlobStager,
         idempotency_key: impl Into<String>,
     ) -> Option<PerceptEmitParams> {
+        let empty_approvals = PendingApprovalPromptMap::new(0);
+        match self.translate_inbound_action(
+            inbound,
+            transport,
+            echo_registry,
+            &empty_approvals,
+            blob_stager,
+            idempotency_key,
+        )? {
+            InboundAction::PerceptEmit(percept) => Some(*percept),
+            InboundAction::ApprovalResolve(_) => None,
+        }
+    }
+
+    /// Translates an [`InboundMessage`] to an [`InboundAction`] (`percept/emit` or
+    /// `approval/resolve` when a `ReactionMessage` matches a pending `approval.prompt`).
+    pub fn translate_inbound_action(
+        &mut self,
+        inbound: &InboundMessage,
+        transport: &mut dyn WhatsAppTransport,
+        echo_registry: &EchoRegistry,
+        pending_approvals: &PendingApprovalPromptMap,
+        blob_stager: &mut dyn BlobStager,
+        idempotency_key: impl Into<String>,
+    ) -> Option<InboundAction> {
         let ts_ms_i64 = inbound.info.timestamp.timestamp_millis();
         let msg_timestamp_ms = u64::try_from(ts_ms_i64).unwrap_or(0);
 
@@ -184,6 +300,35 @@ impl InboundTranslator {
 
         let chat_jid = &inbound.info.source.chat;
         let sender_jid = &inbound.info.source.sender;
+        let base = inbound.message.get_base_message();
+
+        if let Some(react) = base.reaction_message.as_option()
+            && let Some(emoji) = react.text.as_deref().map(str::trim).filter(|s| !s.is_empty())
+            && let Some(target_id) = react.key.as_option().and_then(|k| k.id.as_deref())
+            && let Some(binding) = pending_approvals.get(target_id)
+        {
+            let approved = if binding.approve_emojis.iter().any(|e| e == emoji) {
+                Some(true)
+            } else if binding.deny_emojis.iter().any(|e| e == emoji) {
+                Some(false)
+            } else {
+                None
+            };
+            if let Some(approved) = approved {
+                return Some(InboundAction::ApprovalResolve(ApprovalResolveParams {
+                    headers: Waist2Headers::new(idempotency_key),
+                    action_id: ActionId::new(binding.action_id.clone()),
+                    h_act: HAct::new(binding.h_act.clone()),
+                    state_epoch: binding.state_epoch,
+                    approved,
+                    resolver: jid_to_actor(sender_jid),
+                    resolved_at_ms: Time::from_millis(msg_timestamp_ms),
+                    signature: None,
+                    out_of_band_channel: false,
+                }));
+            }
+        }
+
         let place = jid_to_place(chat_jid);
         let actor = jid_to_actor(sender_jid);
 
@@ -197,8 +342,6 @@ impl InboundTranslator {
             }
             Audience::new(set)
         };
-
-        let base = inbound.message.get_base_message();
 
         // Cache poll creation secrets if an incoming poll carries messageSecret.
         if let Some(poll_creation) = base
@@ -246,7 +389,7 @@ impl InboundTranslator {
             .map(|rec| CorrelationId::new(rec.action_id.as_str()))
             .or_else(|| Some(CorrelationId::new(inbound.info.id.clone())));
 
-        Some(PerceptEmitParams {
+        Some(InboundAction::PerceptEmit(Box::new(PerceptEmitParams {
             headers: Waist2Headers::new(idempotency_key),
             actor: actor.clone(),
             origin_actor: Some(OriginActor::new(actor)),
@@ -272,7 +415,7 @@ impl InboundTranslator {
             attachments,
             dialogue_act_gap: None,
             peer_expertise_margin: None,
-        })
+        })))
     }
 
     fn extract_payload(

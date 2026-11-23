@@ -18,10 +18,17 @@ use monoagens_store::{ConfigLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::clock::Clock;
-use crate::config::{BodyPluginConfig, BodyTransportConfig, EmbedBackendKind, GatewayConfig};
+use crate::commands::CommandRegistry;
+use crate::config::{
+    BodyPluginConfig, BodyTransportConfig, EmbedBackendKind, GatewayConfig, PluginConfig,
+};
 use crate::cues::CueRecorder;
 use crate::identity::IdentityResolver;
 use crate::logging::{DiagnosticSink, LogLevel};
+use crate::plugins::{
+    PluginEnvContext, PluginStartupReport, SkippedPlugin, build_plugin_env,
+    resolve_plugin_boot_order,
+};
 use crate::prequeue::{PreQueueService, build_embedder_from_config_async};
 use crate::provider::{DailyBudgetTracker, GatewayModelExecutor, build_provider_from_config_async};
 use crate::seams::{DoorController, GatewaySeams};
@@ -283,9 +290,108 @@ impl GatewayHandle {
         self.router.connect_stdio_process(command, args).await
     }
 
+    /// Connects a configured stdio child process body with extra injected environment variables.
+    pub async fn connect_stdio_body_with_env(
+        &self,
+        command: &str,
+        args: &[String],
+        extra_envs: &[(String, String)],
+    ) -> Result<BodyId, BodyRpcError> {
+        self.router
+            .connect_stdio_process_with_env(command, args, extra_envs)
+            .await
+    }
+
     /// Connects a configured Unix socket body.
     pub async fn connect_unix_body(&self, path: &std::path::Path) -> Result<BodyId, BodyRpcError> {
         self.router.connect_unix_socket(path).await
+    }
+
+    /// Resolves plugin dependencies, injects plugin-owned config/state env paths, and connects
+    /// enabled plugins in topological boot order with crash isolation.
+    pub async fn connect_configured_plugins(
+        &self,
+        plugins: &[PluginConfig],
+        env_ctx: &PluginEnvContext,
+    ) -> PluginStartupReport {
+        let builtin_features: &[&str] = if env_ctx.rbac_enabled { &["rbac"] } else { &[] };
+        let plan = resolve_plugin_boot_order(plugins, builtin_features);
+        let mut report = PluginStartupReport {
+            connected: Vec::new(),
+            failed: Vec::new(),
+            skipped: plan.skipped,
+        };
+
+        for skip in &report.skipped {
+            self.diagnostics.log(
+                self.clock.now(),
+                LogLevel::Warn,
+                "gateway.plugin",
+                &format!("skipped plugin '{}': {}", skip.id, skip.reason),
+            );
+        }
+
+        let mut failed_ids = std::collections::BTreeSet::new();
+        for plugin in plan.ordered {
+            if let Some(missing_req) = plugin
+                .dependencies
+                .iter()
+                .find(|dep| failed_ids.contains(dep.as_str()))
+            {
+                let reason = format!("required dependency '{missing_req}' failed to connect");
+                self.diagnostics.log(
+                    self.clock.now(),
+                    LogLevel::Warn,
+                    "gateway.plugin",
+                    &format!("skipped plugin '{}': {reason}", plugin.id),
+                );
+                failed_ids.insert(plugin.id.clone());
+                report.skipped.push(SkippedPlugin {
+                    id: plugin.id,
+                    reason,
+                });
+                continue;
+            }
+
+            let result = match &plugin.transport {
+                BodyTransportConfig::Stdio { command, args } => {
+                    let extra_envs = build_plugin_env(&plugin.id, env_ctx);
+                    self.connect_stdio_body_with_env(command, args, &extra_envs)
+                        .await
+                }
+                BodyTransportConfig::UnixSocket { path } => self.connect_unix_body(path).await,
+            };
+
+            match result {
+                Ok(body_id) => {
+                    report.connected.push(BodyConnectOutcome {
+                        config_id: plugin.id,
+                        result: Ok(body_id),
+                    });
+                }
+                Err(err) => {
+                    self.diagnostics.log(
+                        self.clock.now(),
+                        LogLevel::Warn,
+                        "gateway.plugin",
+                        &format!("failed to connect configured plugin '{}': {err}", plugin.id),
+                    );
+                    failed_ids.insert(plugin.id.clone());
+                    report.failed.push(BodyConnectOutcome {
+                        config_id: plugin.id,
+                        result: Err(err),
+                    });
+                }
+            }
+        }
+
+        report
+    }
+
+    /// Returns the shared [`CommandRegistry`] on the router.
+    #[must_use]
+    pub fn command_registry(&self) -> Arc<Mutex<CommandRegistry>> {
+        self.router.command_registry()
     }
 
     /// Connects all configured external body plugins with crash isolation: one failing

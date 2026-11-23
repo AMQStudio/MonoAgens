@@ -3,21 +3,25 @@
 #![forbid(unsafe_code)]
 
 pub mod body;
+pub mod config;
 pub mod inbound;
 pub mod transport;
 pub mod types;
 
 pub use body::{BlobLookup, MemoryBlobLookup, WhatsAppBody};
+pub use config::{WhatsAppPluginConfig, default_session_db_path, resolve_state_dir_from_env};
 pub use inbound::{
-    BlobStager, CachedPoll, GroupAudienceCache, InboundTranslator, MemoryBlobStager, PollSecretCache,
+    BlobStager, CachedPoll, GroupAudienceCache, InboundAction, InboundTranslator,
+    MemoryBlobStager, PendingApprovalBinding, PendingApprovalPromptMap, PollSecretCache,
 };
 pub use transport::{
     LiveWhatsAppTransport, OfflineWhatsAppTransport, PreparedMedia, PreparedSticker,
     RecordedOutboundAction, WhatsAppTransport,
 };
 pub use types::{
-    CAP_CHAT_DELETE, CAP_CHAT_EDIT, CAP_CHAT_MARK_READ, CAP_CHAT_REACT, CAP_CHAT_SEND_MEDIA,
-    CAP_CHAT_SEND_POLL, CAP_CHAT_SEND_STICKER, CAP_CHAT_SPEAK, CAP_CHAT_TYPING, DEFAULT_BODY_ID,
+    ApprovalPromptRequest, CAP_APPROVAL_PROMPT, CAP_CHAT_DELETE, CAP_CHAT_EDIT,
+    CAP_CHAT_MARK_READ, CAP_CHAT_REACT, CAP_CHAT_SEND_MEDIA, CAP_CHAT_SEND_POLL,
+    CAP_CHAT_SEND_STICKER, CAP_CHAT_SPEAK, CAP_CHAT_TYPING, DEFAULT_BODY_ID,
     DEFAULT_BUBBLE_CAP, DEFAULT_SYSTEM_PLACE, DeleteRequest, EditRequest,
     INLINE_ATTACHMENT_CAP_BYTES, MarkReadRequest, MediaAttachmentInput, MediaKind,
     PRE_BOOT_GRACE_MS, ReactRequest, SendMediaRequest, SendPollRequest, SendStickerRequest,

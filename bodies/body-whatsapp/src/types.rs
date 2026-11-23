@@ -23,6 +23,7 @@ pub const INLINE_ATTACHMENT_CAP_BYTES: usize = 256 * 1024;
 /// Clock-skew grace window before `boot_timestamp_ms` when filtering historical messages.
 pub const PRE_BOOT_GRACE_MS: u64 = 15_000;
 
+pub const CAP_APPROVAL_PROMPT: &str = "approval.prompt";
 pub const CAP_CHAT_DELETE: &str = "chat.delete";
 pub const CAP_CHAT_EDIT: &str = "chat.edit";
 pub const CAP_CHAT_MARK_READ: &str = "chat.mark_read";
@@ -145,7 +146,7 @@ pub fn normalize_declared_places(extra_places: impl IntoIterator<Item = PlaceId>
     set.into_iter().collect()
 }
 
-/// Builds the 9 deterministically sorted native WhatsApp Waist-2 [`CapabilityDescriptor`]s.
+/// Builds the 10 deterministically sorted native WhatsApp Waist-2 [`CapabilityDescriptor`]s.
 #[must_use]
 pub fn build_whatsapp_capabilities(places: &[PlaceId]) -> Vec<CapabilityDescriptor> {
     let place_names: Vec<&str> = places.iter().map(PlaceId::as_str).collect();
@@ -166,6 +167,42 @@ pub fn build_whatsapp_capabilities(places: &[PlaceId]) -> Vec<CapabilityDescript
     };
 
     let mut caps = vec![
+        CapabilityDescriptor {
+            id: CapabilityId::new(CAP_APPROVAL_PROMPT),
+            description:
+                "Render a generic pending-approval prompt in WhatsApp with emoji reaction instructions"
+                    .to_owned(),
+            places: places.to_vec(),
+            flags: communicative,
+            typical_latency_ms: 150,
+            capability_schema_hash: capability_schema_hash(&json!({
+                "capability": CAP_APPROVAL_PROMPT,
+                "places": &place_names,
+                "input": {
+                    "type": "object",
+                    "required": [
+                        "action_id",
+                        "h_act",
+                        "state_epoch",
+                        "capability_id",
+                        "summary",
+                        "expires_at_ms"
+                    ],
+                    "properties": {
+                        "action_id": { "type": "string" },
+                        "h_act": { "type": "string" },
+                        "state_epoch": { "type": "integer", "minimum": 0 },
+                        "capability_id": { "type": "string" },
+                        "target_places": { "type": "array", "items": { "type": "string" } },
+                        "summary": { "type": "string" },
+                        "expires_at_ms": { "type": "integer", "minimum": 0 },
+                        "approve_emojis": { "type": "array", "items": { "type": "string" } },
+                        "deny_emojis": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            })),
+            sensed_effect: None,
+        },
         CapabilityDescriptor {
             id: CapabilityId::new(CAP_CHAT_SPEAK),
             description:
@@ -604,4 +641,21 @@ pub struct DeleteRequest {
     pub message_id: String,
     #[serde(default)]
     pub sender: Option<String>,
+}
+
+/// Request payload for `approval.prompt`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalPromptRequest {
+    pub action_id: String,
+    pub h_act: String,
+    pub state_epoch: u64,
+    pub capability_id: String,
+    #[serde(default)]
+    pub target_places: Vec<String>,
+    pub summary: String,
+    pub expires_at_ms: u64,
+    #[serde(default)]
+    pub approve_emojis: Option<Vec<String>>,
+    #[serde(default)]
+    pub deny_emojis: Option<Vec<String>>,
 }

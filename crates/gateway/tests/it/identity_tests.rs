@@ -287,6 +287,7 @@ fn owner_escalation_guard_refuses_unconfirmed_link_and_never_elevates_linked_acc
             body_id: BodyId::new("body-cli"),
             account_id: "local-owner".to_owned(),
         }],
+        roles: Vec::new(),
     });
 
     let resolver = IdentityResolver::from_gateway_config(&cfg, None).expect("resolver");
@@ -340,6 +341,7 @@ async fn gateway_waist2_percept_emit_resolves_canonical_kappa_actors() {
             body_id: BodyId::new("body-matrix"),
             account_id: "@owner:matrix.org".to_owned(),
         }],
+        roles: Vec::new(),
     });
 
     let resolver =

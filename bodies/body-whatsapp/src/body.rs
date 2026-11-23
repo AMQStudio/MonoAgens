@@ -1,4 +1,4 @@
-//! Waist-2 [`BodyHandler`] implementation (`WhatsAppBody`) translating all 9 native
+//! Waist-2 [`BodyHandler`] implementation (`WhatsAppBody`) translating all 10 native
 //! WhatsApp capabilities into `WhatsAppTransport` operations.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -22,11 +22,15 @@ use serde_json::json;
 use whatsapp_rust::waproto::whatsapp as wa;
 use whatsapp_rust::{ChatStateType, Jid};
 
-use crate::inbound::{CachedPoll, PollSecretCache};
+use crate::config::WhatsAppPluginConfig;
+use crate::inbound::{
+    CachedPoll, PendingApprovalBinding, PendingApprovalPromptMap, PollSecretCache,
+};
 use crate::transport::{OfflineWhatsAppTransport, PreparedMedia, PreparedSticker, WhatsAppTransport};
 use crate::types::{
-    CAP_CHAT_DELETE, CAP_CHAT_EDIT, CAP_CHAT_MARK_READ, CAP_CHAT_REACT, CAP_CHAT_SEND_MEDIA,
-    CAP_CHAT_SEND_POLL, CAP_CHAT_SEND_STICKER, CAP_CHAT_SPEAK, CAP_CHAT_TYPING, DEFAULT_BUBBLE_CAP,
+    ApprovalPromptRequest, CAP_APPROVAL_PROMPT, CAP_CHAT_DELETE, CAP_CHAT_EDIT,
+    CAP_CHAT_MARK_READ, CAP_CHAT_REACT, CAP_CHAT_SEND_MEDIA, CAP_CHAT_SEND_POLL,
+    CAP_CHAT_SEND_STICKER, CAP_CHAT_SPEAK, CAP_CHAT_TYPING, DEFAULT_BUBBLE_CAP,
     DEFAULT_SYSTEM_PLACE, DeleteRequest, EditRequest, MarkReadRequest, MediaAttachmentInput,
     ReactRequest, SendMediaRequest, SendPollRequest, SendStickerRequest, SpeakRequest,
     TypingRequest, bare_jid_string, build_whatsapp_capabilities, is_owned_whatsapp_place,
@@ -72,9 +76,11 @@ pub struct WhatsAppBody<T: WhatsAppTransport = OfflineWhatsAppTransport> {
     declared_places: BTreeSet<PlaceId>,
     bubble_cap: usize,
     thresholds: HonestCueThresholds,
+    config: WhatsAppPluginConfig,
     transport: T,
     echo_registry: EchoRegistry,
     poll_secrets: PollSecretCache,
+    pending_approvals: PendingApprovalPromptMap,
     barge_in: BargeInToken,
     held_actions: HashSet<ActionId>,
     blob_lookup: Box<dyn BlobLookup + Send>,
@@ -100,9 +106,11 @@ impl<T: WhatsAppTransport> WhatsAppBody<T> {
                 .collect(),
             bubble_cap: DEFAULT_BUBBLE_CAP,
             thresholds: HonestCueThresholds::default(),
+            config: WhatsAppPluginConfig::default(),
             transport,
             echo_registry: EchoRegistry::default(),
             poll_secrets: PollSecretCache::default(),
+            pending_approvals: PendingApprovalPromptMap::default(),
             barge_in: BargeInToken::new(),
             held_actions: HashSet::new(),
             blob_lookup: Box::new(MemoryBlobLookup::default()),
@@ -110,11 +118,24 @@ impl<T: WhatsAppTransport> WhatsAppBody<T> {
         }
     }
 
+    /// Configures plugin settings loaded from `whatsapp.toml`.
+    #[must_use]
+    pub fn with_config(mut self, config: WhatsAppPluginConfig) -> Self {
+        self.config = config;
+        self
+    }
+
     /// Configures a custom [`BlobLookup`] for resolving `blob_ref` attachments.
     #[must_use]
     pub fn with_blob_lookup(mut self, lookup: impl BlobLookup + Send + 'static) -> Self {
         self.blob_lookup = Box::new(lookup);
         self
+    }
+
+    /// Borrows the active [`WhatsAppPluginConfig`].
+    #[must_use]
+    pub fn config(&self) -> &WhatsAppPluginConfig {
+        &self.config
     }
 
     /// Registers an owned WhatsApp place so `body/discover` lists it deterministically.
@@ -145,6 +166,25 @@ impl<T: WhatsAppTransport> WhatsAppBody<T> {
     #[must_use]
     pub fn poll_secrets(&self) -> &PollSecretCache {
         &self.poll_secrets
+    }
+
+    /// Borrows the [`PendingApprovalPromptMap`] tracking `approval.prompt` message bindings.
+    #[must_use]
+    pub fn pending_approvals(&self) -> &PendingApprovalPromptMap {
+        &self.pending_approvals
+    }
+
+    /// Mutably borrows the [`PendingApprovalPromptMap`].
+    pub fn pending_approvals_mut(&mut self) -> &mut PendingApprovalPromptMap {
+        &mut self.pending_approvals
+    }
+
+    /// Splits mutable transport access from read-only echo & pending-approval state for
+    /// inbound event translation without cloning maps.
+    pub fn inbound_context_mut(
+        &mut self,
+    ) -> (&mut T, &EchoRegistry, &PendingApprovalPromptMap) {
+        (&mut self.transport, &self.echo_registry, &self.pending_approvals)
     }
 
     /// Sets the local clock timestamp used in emitted receipts.
@@ -178,7 +218,9 @@ impl<T: WhatsAppTransport> WhatsAppBody<T> {
             &req.mentions,
         );
 
-        let _ = self.transport.send_chatstate(chat, ChatStateType::Composing);
+        if self.config.auto_typing_on_speak {
+            let _ = self.transport.send_chatstate(chat, ChatStateType::Composing);
+        }
 
         let mut sink = WhatsAppBubbleSink {
             transport: &mut self.transport,
@@ -198,7 +240,9 @@ impl<T: WhatsAppTransport> WhatsAppBody<T> {
         )
         .map_err(|e| Waist2Error::invalid_receipt_transition(e.to_string()))?;
 
-        let _ = self.transport.send_chatstate(chat, ChatStateType::Paused);
+        if self.config.auto_typing_on_speak {
+            let _ = self.transport.send_chatstate(chat, ChatStateType::Paused);
+        }
 
         if self.barge_in.is_triggered() {
             self.barge_in = BargeInToken::new();
@@ -597,6 +641,107 @@ impl<T: WhatsAppTransport> WhatsAppBody<T> {
             Err(err) => Ok(failed_result(params, "delete_failed", err, 0, self.clock_now_ms)),
         }
     }
+
+    fn execute_approval_prompt(
+        &mut self,
+        params: &ActionExecuteParams,
+        chat: &Jid,
+    ) -> Result<ActionExecuteResult, Waist2Error> {
+        let req: ApprovalPromptRequest = match serde_json::from_slice(params.payload.as_bytes()) {
+            Ok(req) => req,
+            Err(err) => {
+                return Ok(refused_result(
+                    params,
+                    "ERR_INVALID_PAYLOAD",
+                    format!("invalid approval.prompt payload: {err}"),
+                    self.clock_now_ms,
+                ));
+            }
+        };
+        if req.action_id.trim().is_empty()
+            || req.h_act.trim().is_empty()
+            || req.capability_id.trim().is_empty()
+            || req.summary.trim().is_empty()
+        {
+            return Ok(refused_result(
+                params,
+                "ERR_INVALID_PAYLOAD",
+                "approval.prompt requires non-empty action_id, h_act, capability_id, and summary",
+                self.clock_now_ms,
+            ));
+        }
+
+        let approve_emojis = self
+            .config
+            .effective_approve_emojis(req.approve_emojis.as_deref());
+        let deny_emojis = self
+            .config
+            .effective_deny_emojis(req.deny_emojis.as_deref());
+        let prompt_text = render_approval_prompt_text(&req, &approve_emojis, &deny_emojis);
+
+        match self.transport.send_text(chat, &prompt_text, None) {
+            Ok(pid) => {
+                let ts = Time::from_millis(self.clock_now_ms);
+                self.echo_registry
+                    .register_echo(pid.clone(), params.action_id.clone(), 0, ts);
+                self.pending_approvals.insert(
+                    pid.clone(),
+                    PendingApprovalBinding {
+                        action_id: req.action_id.clone(),
+                        h_act: req.h_act.clone(),
+                        state_epoch: req.state_epoch,
+                        approve_emojis: approve_emojis.clone(),
+                        deny_emojis: deny_emojis.clone(),
+                        expires_at_ms: req.expires_at_ms,
+                    },
+                );
+                Ok(done_result(
+                    params,
+                    1,
+                    json!({
+                        "pids": [pid],
+                        "prompt_message_id": pid,
+                        "action_id": req.action_id,
+                        "h_act": req.h_act,
+                        "state_epoch": req.state_epoch,
+                        "approve_emojis": approve_emojis,
+                        "deny_emojis": deny_emojis,
+                    })
+                    .to_string(),
+                    ts,
+                ))
+            }
+            Err(err) => Ok(failed_result(
+                params,
+                "approval_prompt_failed",
+                err,
+                0,
+                self.clock_now_ms,
+            )),
+        }
+    }
+}
+
+fn render_approval_prompt_text(
+    req: &ApprovalPromptRequest,
+    approve_emojis: &[String],
+    deny_emojis: &[String],
+) -> String {
+    let mut lines = vec![
+        "Approval required".to_owned(),
+        format!("Action: {}", req.action_id),
+        format!("Capability: {}", req.capability_id),
+        format!("Summary: {}", req.summary),
+    ];
+    if !req.target_places.is_empty() {
+        lines.push(format!("Places: {}", req.target_places.join(", ")));
+    }
+    lines.push(format!(
+        "React {} to approve or {} to deny.",
+        approve_emojis.join(" / "),
+        deny_emojis.join(" / "),
+    ));
+    lines.join("\n")
 }
 
 struct WhatsAppBubbleSink<'a, T: WhatsAppTransport> {
@@ -712,6 +857,7 @@ impl<T: WhatsAppTransport> BodyHandler for WhatsAppBody<T> {
         };
 
         let result = match params.capability_id.as_str() {
+            CAP_APPROVAL_PROMPT => self.execute_approval_prompt(&params, &chat),
             CAP_CHAT_SPEAK => self.execute_speak(&params, &chat),
             CAP_CHAT_REACT => self.execute_react(&params, &chat),
             CAP_CHAT_TYPING => self.execute_typing(&params, &chat),
@@ -803,7 +949,8 @@ impl<T: WhatsAppTransport> BodyHandler for WhatsAppBody<T> {
 fn is_known_capability(id: &str) -> bool {
     matches!(
         id,
-        CAP_CHAT_SPEAK
+        CAP_APPROVAL_PROMPT
+            | CAP_CHAT_SPEAK
             | CAP_CHAT_REACT
             | CAP_CHAT_TYPING
             | CAP_CHAT_SEND_MEDIA

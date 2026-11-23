@@ -5,13 +5,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod config;
 pub mod transport;
 pub mod types;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -24,18 +26,20 @@ use monoagens_body_sdk::{
     ActorId, ApprovalResolveParams, ApprovalResolveResult, AttachmentHandle, Audience,
     BodyDiscoverParams, BodyDiscoverResult, BodyHandler, BodyId, BodyShutdownParams,
     BodyShutdownResult, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor, CapabilityFlags,
-    CapabilityId, ChannelId, CorrelationId, MAX_INLINE_ATTACHMENT_BYTES, MetaValue, ModalitySlot,
-    OpaquePayload, OriginActor, Percept, PerceptEmitParams, PerceptEmitResult, PlaceId, Receipt,
-    ReceiptOutcome, Taint, TerminationReason, Time, Waist2Error, Waist2Headers, sort_capabilities,
+    CapabilityId, ChannelId, CorrelationId, HAct, MAX_INLINE_ATTACHMENT_BYTES, MetaValue,
+    ModalitySlot, OpaquePayload, OriginActor, Percept, PerceptEmitParams, PerceptEmitResult,
+    PlaceId, Receipt, ReceiptOutcome, Taint, TerminationReason, Time, Waist2Error, Waist2Headers,
+    sort_capabilities,
 };
 use serde_json::{Value, json};
 
+pub use config::{TelegramPluginConfig, resolve_state_dir_from_env};
 pub use transport::{
     DEFAULT_TELEGRAM_API_BASE, LiveTelegramTransport, OfflineTelegramTransport, RecordedCall,
     RecordingTelegramTransport, TelegramTransport,
 };
 pub use types::{
-    DEFAULT_TELEGRAM_SYSTEM_PLACE, DeletePayload, EditPayload, InlineButton, MediaAttachmentInput,
+    ApprovalPromptPayload, DEFAULT_TELEGRAM_SYSTEM_PLACE, DeletePayload, EditPayload, InlineButton, MediaAttachmentInput,
     MediaKind, MediaSource, OutboundMediaItem, PollKind, ReactPayload, SendButtonsPayload,
     SendMediaPayload, SendPollPayload, SendStickerPayload, SpeakPayload, TELEGRAM_TEXT_CAP,
     TelegramTarget, TgApiResponse, TgAudio, TgCallbackQuery, TgChat, TgChatAction, TgChatMember,
@@ -47,8 +51,40 @@ pub use types::{
 /// Default Waist-2 body identifier for `body-telegram`.
 pub const DEFAULT_BODY_ID: &str = "body-telegram";
 
+/// Callback data prefix used for generic native `approval.prompt` inline buttons.
+pub const APPROVAL_CALLBACK_PREFIX: &str = "monoagens:approval:";
+
+/// Max bounded number of in-flight `approval.prompt` bindings tracked in memory.
+const MAX_PENDING_APPROVAL_BINDINGS: usize = 1024;
+
 /// Max raw byte threshold before base64 expansion could approach `MAX_INLINE_ATTACHMENT_BYTES`.
 const INLINE_RAW_MEDIA_CAP: usize = 170 * 1024;
+
+/// Binding stored when `approval.prompt` renders a held action in Telegram.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApprovalBinding {
+    pub action_id: String,
+    pub h_act: String,
+    pub state_epoch: u64,
+    pub chat_id: i64,
+    pub message_id: i64,
+    pub prompt_text: String,
+}
+
+/// Outbound `approval/resolve` request emitted when a user taps a native approval button.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutboundApprovalResolve {
+    pub params: ApprovalResolveParams,
+    pub chat_id: i64,
+    pub message_id: Option<i64>,
+}
+
+/// Outbound Waist-2 message produced from an inbound Telegram update.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutboundTelegramEvent {
+    Percept(Box<PerceptEmitParams>),
+    ApprovalResolve(Box<OutboundApprovalResolve>),
+}
 
 /// Callback trait for fetching an out-of-band `blob://...` payload from Gateway via `blob/get`.
 pub trait BlobResolver: Send + Sync {
@@ -138,6 +174,7 @@ struct MediaSourceSpec<'a> {
 pub struct TelegramBody<T: TelegramTransport> {
     body_id: BodyId,
     transport: T,
+    config: TelegramPluginConfig,
     declared_places: Vec<PlaceId>,
     owned_places: BTreeSet<PlaceId>,
     bot_user: Option<TgUser>,
@@ -146,6 +183,8 @@ pub struct TelegramBody<T: TelegramTransport> {
     echo_registry: EchoRegistry,
     barge_in: BargeInToken,
     held_actions: HashSet<ActionId>,
+    pending_approvals: HashMap<String, PendingApprovalBinding>,
+    pending_approval_order: VecDeque<String>,
     thresholds: HonestCueThresholds,
     clock_now_ms: u64,
     next_key_seq: u64,
@@ -163,6 +202,7 @@ impl<T: TelegramTransport> TelegramBody<T> {
         Self {
             body_id,
             transport,
+            config: TelegramPluginConfig::default(),
             declared_places: vec![default_place],
             owned_places,
             bot_user: None,
@@ -171,12 +211,33 @@ impl<T: TelegramTransport> TelegramBody<T> {
             echo_registry: EchoRegistry::default(),
             barge_in: BargeInToken::new(),
             held_actions: HashSet::new(),
+            pending_approvals: HashMap::new(),
+            pending_approval_order: VecDeque::new(),
             thresholds: HonestCueThresholds::default(),
             clock_now_ms: 0,
             next_key_seq: 0,
             blob_resolver: None,
             shutdown_flag: None,
         }
+    }
+
+    /// Attaches a self-managed [`TelegramPluginConfig`].
+    #[must_use]
+    pub fn with_config(mut self, config: TelegramPluginConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Returns a reference to the active [`TelegramPluginConfig`].
+    #[must_use]
+    pub fn config(&self) -> &TelegramPluginConfig {
+        &self.config
+    }
+
+    /// Looks up a pending `approval.prompt` binding by `action_id`.
+    #[must_use]
+    pub fn pending_approval(&self, action_id: &str) -> Option<&PendingApprovalBinding> {
+        self.pending_approvals.get(action_id)
     }
 
     /// Configures custom initial declared places (sorted and deduplicated).
@@ -321,28 +382,96 @@ impl<T: TelegramTransport> TelegramBody<T> {
         Audience::new(entry.iter().cloned())
     }
 
-    /// Translates one inbound Telegram [`TgUpdate`] into zero or more Waist-2 `percept/emit` payloads.
+    /// Translates one inbound Telegram [`TgUpdate`] into a Waist-2 `percept/emit` payload,
+    /// returning `Ok(None)` for self-echoes and native `approval.prompt` callbacks.
     ///
-    /// Automatically suppresses self-echoes, answers `callback_query` taps via Telegram Bot API,
-    /// maintains non-empty group `audience` caches, and stages attachments `> 256 KiB` via `blob/put`.
+    /// Prefer [`Self::translate_update_event`] when handling both `percept/emit` and
+    /// `approval/resolve` outbound RPCs.
     pub fn translate_update(
         &mut self,
         update: &TgUpdate,
         stager: Option<&mut dyn BlobStager>,
     ) -> Result<Option<PerceptEmitParams>, String> {
+        match self.translate_update_event(update, stager)? {
+            Some(OutboundTelegramEvent::Percept(p)) => Ok(Some(*p)),
+            Some(OutboundTelegramEvent::ApprovalResolve(_)) | None => Ok(None),
+        }
+    }
+
+    /// Translates one inbound Telegram [`TgUpdate`] into either a Waist-2 `percept/emit`
+    /// or an `approval/resolve` request (for `monoagens:approval:*` inline button taps).
+    ///
+    /// Automatically suppresses self-echoes, answers `callback_query` taps via Telegram Bot API,
+    /// maintains non-empty group `audience` caches, and stages attachments `> 256 KiB` via `blob/put`.
+    pub fn translate_update_event(
+        &mut self,
+        update: &TgUpdate,
+        stager: Option<&mut dyn BlobStager>,
+    ) -> Result<Option<OutboundTelegramEvent>, String> {
         if let Some(ref msg) = update.message {
-            return self.translate_message(update.update_id, msg, false, stager);
+            return Ok(self
+                .translate_message(update.update_id, msg, false, stager)?
+                .map(|p| OutboundTelegramEvent::Percept(Box::new(p))));
         }
         if let Some(ref msg) = update.edited_message {
-            return self.translate_message(update.update_id, msg, true, stager);
+            return Ok(self
+                .translate_message(update.update_id, msg, true, stager)?
+                .map(|p| OutboundTelegramEvent::Percept(Box::new(p))));
         }
         if let Some(ref cq) = update.callback_query {
             return self.translate_callback_query(update.update_id, cq);
         }
         if let Some(ref mr) = update.message_reaction {
-            return self.translate_message_reaction(update.update_id, mr);
+            return Ok(self
+                .translate_message_reaction(update.update_id, mr)?
+                .map(|p| OutboundTelegramEvent::Percept(Box::new(p))));
         }
         Ok(None)
+    }
+
+    /// Marks a bound `approval.prompt` message as resolved (removing its binding and
+    /// best-effort editing the Telegram message to clear inline buttons so it cannot be double-tapped).
+    pub fn mark_approval_resolved(&mut self, action_id: &str, approved: bool, resolver: &ActorId) {
+        let Some(binding) = self.remove_pending_approval(action_id) else {
+            return;
+        };
+        let status_line = if approved {
+            format!("✅ Approved by {}", resolver.as_str())
+        } else {
+            format!("❌ Denied by {}", resolver.as_str())
+        };
+        let updated_text = format!("{}\n\n{status_line}", binding.prompt_text);
+        let empty_buttons: [Vec<InlineButton>; 0] = [];
+        let _ = self.transport.edit_message_text(
+            binding.chat_id,
+            binding.message_id,
+            &updated_text,
+            None,
+            Some(&empty_buttons),
+        );
+    }
+
+    fn insert_pending_approval(&mut self, binding: PendingApprovalBinding) {
+        let action_id = binding.action_id.clone();
+        if !self.pending_approvals.contains_key(&action_id) {
+            while self.pending_approval_order.len() >= MAX_PENDING_APPROVAL_BINDINGS {
+                if let Some(oldest) = self.pending_approval_order.pop_front() {
+                    self.pending_approvals.remove(&oldest);
+                } else {
+                    break;
+                }
+            }
+            self.pending_approval_order.push_back(action_id.clone());
+        }
+        self.pending_approvals.insert(action_id, binding);
+    }
+
+    fn remove_pending_approval(&mut self, action_id: &str) -> Option<PendingApprovalBinding> {
+        let removed = self.pending_approvals.remove(action_id);
+        if removed.is_some() {
+            self.pending_approval_order.retain(|id| id != action_id);
+        }
+        removed
     }
 
     fn is_self_user(&self, user: Option<&TgUser>) -> bool {
@@ -624,7 +753,82 @@ impl<T: TelegramTransport> TelegramBody<T> {
         &mut self,
         update_id: i64,
         cq: &TgCallbackQuery,
-    ) -> Result<Option<PerceptEmitParams>, String> {
+    ) -> Result<Option<OutboundTelegramEvent>, String> {
+        if let Some(data) = cq.data.as_deref()
+            && let Some(rest) = data.strip_prefix(APPROVAL_CALLBACK_PREFIX)
+        {
+            if self.is_self_user(Some(&cq.from)) {
+                let _ = self.transport.answer_callback_query(&cq.id, None, false);
+                return Ok(None);
+            }
+            let parsed = rest.rsplit_once(':').and_then(|(action_id, verb)| {
+                if action_id.is_empty() {
+                    return None;
+                }
+                match verb {
+                    "approve" => Some((action_id, true)),
+                    "deny" => Some((action_id, false)),
+                    _ => None,
+                }
+            });
+            let Some((action_id, approved)) = parsed else {
+                let _ = self.transport.answer_callback_query(
+                    &cq.id,
+                    Some("Approval expired or unknown"),
+                    false,
+                );
+                return Ok(None);
+            };
+            let Some(binding) = self.pending_approvals.get(action_id).cloned() else {
+                let _ = self.transport.answer_callback_query(
+                    &cq.id,
+                    Some("Approval expired or unknown"),
+                    false,
+                );
+                return Ok(None);
+            };
+
+            let ack_text = if approved {
+                "Approval submitted"
+            } else {
+                "Denial submitted"
+            };
+            let _ = self
+                .transport
+                .answer_callback_query(&cq.id, Some(ack_text), false);
+
+            let resolved_at_ms = if self.clock_now_ms > 0 {
+                self.clock_now_ms
+            } else {
+                current_unix_ms()
+            };
+            let resolver = format_user_actor(cq.from.id);
+            let headers =
+                Waist2Headers::new(self.next_idempotency_key(&format!("approval-cb-{update_id}")));
+            let params = ApprovalResolveParams {
+                headers,
+                action_id: ActionId::new(binding.action_id),
+                h_act: HAct::new(binding.h_act),
+                state_epoch: binding.state_epoch,
+                approved,
+                resolver,
+                resolved_at_ms: Time::from_millis(resolved_at_ms),
+                signature: None,
+                out_of_band_channel: true,
+            };
+            return Ok(Some(OutboundTelegramEvent::ApprovalResolve(Box::new(
+                OutboundApprovalResolve {
+                    params,
+                    chat_id: binding.chat_id,
+                    message_id: cq
+                        .message
+                        .as_ref()
+                        .map(|m| m.message_id)
+                        .or(Some(binding.message_id)),
+                },
+            ))));
+        }
+
         // Automatically acknowledge Telegram inline button taps so the client spinner clears.
         let _ = self.transport.answer_callback_query(&cq.id, None, false);
 
@@ -674,7 +878,9 @@ impl<T: TelegramTransport> TelegramBody<T> {
         percept.length = cq.data.as_ref().map(|d| d.len() as u64);
 
         let headers = Waist2Headers::new(self.next_idempotency_key(&format!("cb-{update_id}")));
-        Ok(Some(PerceptEmitParams::from_percept(headers, percept)))
+        Ok(Some(OutboundTelegramEvent::Percept(Box::new(
+            PerceptEmitParams::from_percept(headers, percept),
+        ))))
     }
 
     fn translate_message_reaction(
@@ -821,6 +1027,31 @@ impl<T: TelegramTransport> TelegramBody<T> {
         };
 
         let mut caps = vec![
+            make(
+                "approval.prompt",
+                "Render a generic held-action approval prompt with native Telegram inline_keyboard Approve/Deny buttons",
+                true,
+                false,
+                180,
+                json!({
+                    "capability": "approval.prompt",
+                    "input": {
+                        "type": "object",
+                        "required": ["action_id", "h_act", "state_epoch", "capability_id", "summary", "expires_at_ms"],
+                        "properties": {
+                            "action_id": { "type": "string" },
+                            "h_act": { "type": "string" },
+                            "state_epoch": { "type": "integer" },
+                            "capability_id": { "type": "string" },
+                            "target_places": { "type": "array", "items": { "type": "string" } },
+                            "summary": { "type": "string" },
+                            "expires_at_ms": { "type": "integer" },
+                            "approve_label": { "type": "string" },
+                            "deny_label": { "type": "string" }
+                        }
+                    }
+                }),
+            ),
             make(
                 "chat.speak",
                 "Send Telegram text message(s) with 4096-char split-bubble delivery, automatic typing indicator, optional reply_to_message_id, parse_mode, and inline buttons",
@@ -1064,9 +1295,16 @@ impl<T: TelegramTransport> TelegramBody<T> {
 
         let chat_id = target.chat_id().unwrap_or(0);
         let thread_id = target.thread_id();
-        let _ = self
-            .transport
-            .send_chat_action(chat_id, thread_id, TgChatAction::Typing);
+        if self.config.auto_typing_on_speak {
+            let _ = self
+                .transport
+                .send_chat_action(chat_id, thread_id, TgChatAction::Typing);
+        }
+
+        let effective_parse_mode = speak
+            .parse_mode
+            .as_deref()
+            .or(self.config.default_parse_mode.as_deref());
 
         let total_chunks = split_text_chunks(&speak.text, TELEGRAM_TEXT_CAP)
             .map(|c| c.len())
@@ -1076,7 +1314,7 @@ impl<T: TelegramTransport> TelegramBody<T> {
             transport: &mut self.transport,
             chat_id,
             thread_id,
-            parse_mode: speak.parse_mode.as_deref(),
+            parse_mode: effective_parse_mode,
             reply_to_message_id: speak.reply_to_message_id,
             buttons: speak.buttons.as_deref(),
             total_chunks,
@@ -1155,15 +1393,22 @@ impl<T: TelegramTransport> TelegramBody<T> {
         }
         let chat_id = target.chat_id().unwrap_or(0);
         let thread_id = target.thread_id();
-        let _ = self
-            .transport
-            .send_chat_action(chat_id, thread_id, TgChatAction::Typing);
+        if self.config.auto_typing_on_speak {
+            let _ = self
+                .transport
+                .send_chat_action(chat_id, thread_id, TgChatAction::Typing);
+        }
+
+        let effective_parse_mode = payload
+            .parse_mode
+            .as_deref()
+            .or(self.config.default_parse_mode.as_deref());
 
         match self.transport.send_message(
             chat_id,
             thread_id,
             &payload.text,
-            payload.parse_mode.as_deref(),
+            effective_parse_mode,
             payload.reply_to_message_id,
             Some(&payload.buttons),
         ) {
@@ -1380,7 +1625,10 @@ impl<T: TelegramTransport> TelegramBody<T> {
                 kind: att.kind,
                 source,
                 caption: item_caption,
-                parse_mode: payload.parse_mode.clone(),
+                parse_mode: payload
+                    .parse_mode
+                    .clone()
+                    .or_else(|| self.config.default_parse_mode.clone()),
             });
         }
 
@@ -1698,11 +1946,15 @@ impl<T: TelegramTransport> TelegramBody<T> {
             }
         };
         let chat_id = target.chat_id().unwrap_or(0);
+        let effective_parse_mode = payload
+            .parse_mode
+            .as_deref()
+            .or(self.config.default_parse_mode.as_deref());
         match self.transport.edit_message_text(
             chat_id,
             payload.message_id,
             &payload.text,
-            payload.parse_mode.as_deref(),
+            effective_parse_mode,
             payload.buttons.as_deref(),
         ) {
             Ok(()) => done_result(
@@ -1766,6 +2018,145 @@ impl<T: TelegramTransport> TelegramBody<T> {
             ),
         }
     }
+
+    fn execute_approval_prompt(
+        &mut self,
+        params: ActionExecuteParams,
+        target: &TelegramTarget,
+    ) -> ActionExecuteResult {
+        let payload: ApprovalPromptPayload = match serde_json::from_slice(params.payload.as_bytes())
+        {
+            Ok(p) => p,
+            Err(e) => {
+                return refused_result(
+                    params.action_id,
+                    params.capability_id,
+                    "ERR_INVALID_PAYLOAD",
+                    format!("invalid approval.prompt payload: {e}"),
+                    params.h_act,
+                    self.clock_now_ms,
+                );
+            }
+        };
+
+        if payload.action_id.trim().is_empty()
+            || payload.h_act.trim().is_empty()
+            || payload.capability_id.trim().is_empty()
+        {
+            return refused_result(
+                params.action_id,
+                params.capability_id,
+                "ERR_INVALID_PAYLOAD",
+                "approval.prompt requires non-empty action_id, h_act, and capability_id",
+                params.h_act,
+                self.clock_now_ms,
+            );
+        }
+
+        let approve_label = payload
+            .approve_label
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&self.config.approve_button_label)
+            .to_owned();
+        let deny_label = payload
+            .deny_label
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&self.config.deny_button_label)
+            .to_owned();
+
+        let places_line = if payload.target_places.is_empty() {
+            String::new()
+        } else {
+            format!("\nPlaces: {}", payload.target_places.join(", "))
+        };
+        let prompt_text = format!(
+            "Approval required\nAction: {}\nCapability: {}{}\nSummary: {}\nExpires at: {} ms",
+            payload.action_id,
+            payload.capability_id,
+            places_line,
+            payload.summary,
+            payload.expires_at_ms
+        );
+
+        let buttons = vec![vec![
+            InlineButton {
+                text: approve_label,
+                callback_data: Some(format!(
+                    "{APPROVAL_CALLBACK_PREFIX}{}:approve",
+                    payload.action_id
+                )),
+                url: None,
+            },
+            InlineButton {
+                text: deny_label,
+                callback_data: Some(format!(
+                    "{APPROVAL_CALLBACK_PREFIX}{}:deny",
+                    payload.action_id
+                )),
+                url: None,
+            },
+        ]];
+
+        let chat_id = target.chat_id().unwrap_or(0);
+        let thread_id = target.thread_id();
+        match self.transport.send_message(
+            chat_id,
+            thread_id,
+            &prompt_text,
+            None,
+            None,
+            Some(&buttons),
+        ) {
+            Ok(msg_id) => {
+                let pid = msg_id.to_string();
+                self.echo_registry.register_echo(
+                    pid.clone(),
+                    params.action_id.clone(),
+                    0,
+                    Time::from_millis(self.clock_now_ms),
+                );
+                self.insert_pending_approval(PendingApprovalBinding {
+                    action_id: payload.action_id.clone(),
+                    h_act: payload.h_act,
+                    state_epoch: payload.state_epoch,
+                    chat_id,
+                    message_id: msg_id,
+                    prompt_text,
+                });
+                done_result(
+                    params.action_id,
+                    params.capability_id,
+                    1,
+                    json!({
+                        "pids": [pid],
+                        "primary_pid": msg_id.to_string(),
+                        "bound_action_id": payload.action_id,
+                    }),
+                    params.h_act,
+                    self.clock_now_ms,
+                )
+            }
+            Err(err) => failed_result(
+                params.action_id,
+                params.capability_id,
+                "telegram_approval_prompt_failed",
+                err,
+                0.0,
+                0,
+                params.h_act,
+                self.clock_now_ms,
+            ),
+        }
+    }
+}
+
+fn current_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 struct TgBubbleSender<'a, T: TelegramTransport> {
@@ -1891,7 +2282,8 @@ impl<T: TelegramTransport> BodyHandler for TelegramBody<T> {
         let cap = params.capability_id.as_str();
         let known = matches!(
             cap,
-            "chat.speak"
+            "approval.prompt"
+                | "chat.speak"
                 | "chat.send_buttons"
                 | "chat.react"
                 | "chat.typing"
@@ -1971,6 +2363,7 @@ impl<T: TelegramTransport> BodyHandler for TelegramBody<T> {
         }
 
         match cap {
+            "approval.prompt" => Ok(self.execute_approval_prompt(params, &target)),
             "chat.speak" => self.execute_speak(params, &target, is_delivery_probe),
             "chat.send_buttons" => Ok(self.execute_send_buttons(params, &target)),
             "chat.react" => Ok(self.execute_react(params, &target)),

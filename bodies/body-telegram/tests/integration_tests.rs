@@ -4,16 +4,16 @@ use std::sync::{Arc, Mutex};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use body_telegram::{
-    BlobResolver, LiveTelegramTransport, MediaSource, MemoryBlobStager, PollKind, RecordedCall,
-    RecordingTelegramTransport, SendPollPayload, TELEGRAM_TEXT_CAP, TelegramBody,
-    TelegramTransport, TgCallbackQuery, TgChat, TgChatAction, TgChatMember, TgDocument, TgMessage,
-    TgMessageReactionUpdated, TgPhotoSize, TgReactionType, TgSticker, TgUpdate, TgUser, TgVoice,
-    extract_receipt_pids,
+    APPROVAL_CALLBACK_PREFIX, BlobResolver, LiveTelegramTransport, MediaSource, MemoryBlobStager,
+    OutboundTelegramEvent, PollKind, RecordedCall, RecordingTelegramTransport, SendPollPayload,
+    TELEGRAM_TEXT_CAP, TelegramBody, TelegramPluginConfig, TelegramTransport, TgCallbackQuery,
+    TgChat, TgChatAction, TgChatMember, TgDocument, TgMessage, TgMessageReactionUpdated,
+    TgPhotoSize, TgReactionType, TgSticker, TgUpdate, TgUser, TgVoice, extract_receipt_pids,
 };
 use monoagens_body_kit::PersistentBodyRuntime;
 use monoagens_body_sdk::{
     ActionExecuteParams, ActionId, ActorId, Audience, BodyDiscoverParams, BodyHandler, BodyId,
-    CapabilityId, MAX_INLINE_ATTACHMENT_BYTES, OpaquePayload, PerceptEmitParams, PlaceId,
+    CapabilityId, HAct, MAX_INLINE_ATTACHMENT_BYTES, OpaquePayload, PerceptEmitParams, PlaceId,
     ReceiptOutcome, Waist2ErrorCode, Waist2Headers, Waist2Method, Waist2Request, Waist2Response,
     sort_capabilities,
 };
@@ -67,6 +67,7 @@ fn discover_lists_sorted_native_capabilities_with_hashes() {
     assert_eq!(
         ids,
         vec![
+            "approval.prompt",
             "chat.delete",
             "chat.edit",
             "chat.react",
@@ -1061,4 +1062,576 @@ async fn live_transport_http_mock_server_exercises_all_endpoints() {
         .find(|r| r.path.ends_with("/sendMediaGroup"))
         .unwrap();
     assert!(album_req.body_text.contains("attach://file_0"));
+}
+
+#[test]
+fn plugin_config_auto_generates_and_reloads_custom_labels() {
+    let temp = tempfile::tempdir().unwrap();
+    let cfg_path = temp.path().join("plugins").join("telegram.toml");
+    assert!(!cfg_path.exists());
+
+    // First run: creates parent directories and writes commented default telegram.toml
+    let first = TelegramPluginConfig::load_or_init_from_path(&cfg_path).unwrap();
+    assert_eq!(first, TelegramPluginConfig::default());
+    assert!(cfg_path.exists());
+    let written = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(written.contains("version = 1"));
+    assert!(written.contains("approve_button_label = \"✅ Approve\""));
+    assert!(written.contains("deny_button_label = \"❌ Deny\""));
+
+    // Customize telegram.toml and reload on second run
+    let custom_toml = r#"
+# Custom Telegram plugin configuration
+version = 1
+default_parse_mode = "HTML"
+poll_timeout_secs = 30
+auto_typing_on_speak = false
+approve_button_label = "Ship It"
+deny_button_label = "Abort Action"
+"#;
+    std::fs::write(&cfg_path, custom_toml).unwrap();
+
+    let second = TelegramPluginConfig::load_or_init_from_path(&cfg_path).unwrap();
+    assert_eq!(second.version, 1);
+    assert_eq!(second.default_parse_mode.as_deref(), Some("HTML"));
+    assert_eq!(second.poll_timeout_secs, 30);
+    assert!(!second.auto_typing_on_speak);
+    assert_eq!(second.approve_button_label, "Ship It");
+    assert_eq!(second.deny_button_label, "Abort Action");
+
+    // Verify configured defaults take effect in TelegramBody (default_parse_mode + auto_typing_on_speak)
+    let mut body = TelegramBody::new(
+        BodyId::new("body-telegram"),
+        RecordingTelegramTransport::default(),
+    )
+    .with_config(second);
+
+    let speak = body
+        .execute(make_exec(
+            "act-cfg-speak",
+            "chat.speak",
+            "tg:dm:42",
+            json!({ "text": "<b>Configured</b>" }).to_string().into_bytes(),
+        ))
+        .unwrap();
+    assert_eq!(speak.receipt.unwrap().outcome, ReceiptOutcome::Done);
+
+    let calls = body.transport().snapshot_calls();
+    assert_eq!(calls.len(), 1, "auto_typing_on_speak=false skips sendChatAction");
+    assert!(matches!(
+        &calls[0],
+        RecordedCall::SendMessage { parse_mode: Some(pm), .. } if pm == "HTML"
+    ));
+}
+
+#[test]
+fn binary_auto_initializes_plugin_config_and_state_dir_from_env() {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let temp = tempfile::tempdir().unwrap();
+    let cfg_path = temp.path().join("cfg").join("plugins").join("telegram.toml");
+    let state_dir = temp.path().join("state").join("telegram");
+
+    let discover_req = serde_json::to_string(&Waist2Request::new(
+        Some(monoagens_body_sdk::RpcId::Int(1)),
+        Waist2Method::BodyDiscover,
+        BodyDiscoverParams {
+            headers: Waist2Headers::new("d-env"),
+            body_id: None,
+        },
+    ))
+    .unwrap();
+    let shutdown_req = serde_json::to_string(&Waist2Request::new(
+        Some(monoagens_body_sdk::RpcId::Int(2)),
+        Waist2Method::BodyShutdown,
+        monoagens_body_sdk::BodyShutdownParams {
+            headers: Waist2Headers::new("s-env"),
+            body_id: BodyId::new("body-telegram"),
+            reason: None,
+        },
+    ))
+    .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_body-telegram"))
+        .arg("--offline")
+        .env("MONOAGENS_PLUGIN_CONFIG", &cfg_path)
+        .env("MONOAGENS_PLUGIN_STATE_DIR", &state_dir)
+        .env_remove("MONOAGENS_BODY_STATE_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{discover_req}").unwrap();
+        writeln!(stdin, "{shutdown_req}").unwrap();
+    }
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(cfg_path.exists(), "MONOAGENS_PLUGIN_CONFIG should be auto-generated");
+    assert!(
+        state_dir.join("waist2_body_state.json").exists(),
+        "MONOAGENS_PLUGIN_STATE_DIR should store PersistentBodyRuntime state"
+    );
+
+    // Every line on stdout must be valid JSON-RPC (no logs/config notices on stdout)
+    let stdout_str = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout_str.lines().collect();
+    assert_eq!(lines.len(), 2);
+    let discover_resp: Waist2Response<monoagens_body_sdk::BodyDiscoverResult> =
+        serde_json::from_str(lines[0]).unwrap();
+    assert!(
+        discover_resp
+            .result
+            .unwrap()
+            .capabilities
+            .iter()
+            .any(|c| c.id.as_str() == "approval.prompt")
+    );
+}
+
+#[test]
+fn approval_prompt_renders_inline_buttons_and_resolves_via_callback_query() {
+    let cfg = TelegramPluginConfig {
+        approve_button_label: "Yes, Proceed".to_owned(),
+        deny_button_label: "No, Stop".to_owned(),
+        ..Default::default()
+    };
+
+    let mut body = TelegramBody::new(
+        BodyId::new("body-telegram"),
+        RecordingTelegramTransport::default(),
+    )
+    .with_config(cfg);
+    body.set_now_ms(1_700_000_500_000);
+
+    // 1. Render generic approval.prompt for an arbitrary held action
+    let prompt_res = body
+        .execute(make_exec(
+            "act-prompt-1",
+            "approval.prompt",
+            "tg:dm:42",
+            json!({
+                "action_id": "held-act-99",
+                "h_act": "sha256:deadbeef",
+                "state_epoch": 7,
+                "capability_id": "fs.write",
+                "target_places": ["fs:/tmp/demo.txt"],
+                "summary": "Write 12 bytes to /tmp/demo.txt",
+                "expires_at_ms": 1_700_000_999_000u64
+            })
+            .to_string()
+            .into_bytes(),
+        ))
+        .unwrap();
+    assert!(prompt_res.accepted);
+    let prompt_receipt = prompt_res.receipt.unwrap();
+    assert_eq!(prompt_receipt.outcome, ReceiptOutcome::Done);
+    let prompt_msg_id: i64 = extract_receipt_pids(&prompt_receipt)[0].parse().unwrap();
+
+    let binding = body
+        .pending_approval("held-act-99")
+        .expect("binding recorded");
+    assert_eq!(binding.h_act, "sha256:deadbeef");
+    assert_eq!(binding.state_epoch, 7);
+    assert_eq!(binding.chat_id, 42);
+    assert_eq!(binding.message_id, prompt_msg_id);
+
+    let calls = body.transport().snapshot_calls();
+    let sent_prompt = calls
+        .iter()
+        .find_map(|c| match c {
+            RecordedCall::SendMessage {
+                chat_id,
+                text,
+                buttons,
+                ..
+            } => Some((*chat_id, text.clone(), buttons.clone())),
+            _ => None,
+        })
+        .expect("sendMessage called for approval.prompt");
+    assert_eq!(sent_prompt.0, 42);
+    assert!(sent_prompt.1.contains("held-act-99"));
+    assert!(sent_prompt.1.contains("fs.write"));
+    let kb = sent_prompt.2.expect("inline_keyboard present");
+    assert_eq!(kb.len(), 1);
+    assert_eq!(kb[0].len(), 2);
+    assert_eq!(kb[0][0].text, "Yes, Proceed");
+    assert_eq!(
+        kb[0][0].callback_data.as_deref(),
+        Some("monoagens:approval:held-act-99:approve")
+    );
+    assert_eq!(kb[0][1].text, "No, Stop");
+    assert_eq!(
+        kb[0][1].callback_data.as_deref(),
+        Some("monoagens:approval:held-act-99:deny")
+    );
+
+    // 2. Tapping Approve translates to OutboundTelegramEvent::ApprovalResolve (NOT percept/emit)
+    let approve_upd = TgUpdate {
+        update_id: 501,
+        message: None,
+        edited_message: None,
+        callback_query: Some(TgCallbackQuery {
+            id: "cbq-approve-1".to_owned(),
+            from: TgUser {
+                id: 9001,
+                is_bot: false,
+                first_name: "Owner".to_owned(),
+                last_name: None,
+                username: Some("owner".to_owned()),
+            },
+            message: Some(TgMessage {
+                message_id: prompt_msg_id,
+                message_thread_id: None,
+                from: None,
+                sender_chat: None,
+                date: 1_700_000_500,
+                chat: TgChat {
+                    id: 42,
+                    chat_type: "private".to_owned(),
+                    title: None,
+                    username: None,
+                    is_forum: None,
+                },
+                reply_to_message: None,
+                edit_date: None,
+                media_group_id: None,
+                text: None,
+                caption: None,
+                photo: None,
+                document: None,
+                video: None,
+                audio: None,
+                voice: None,
+                sticker: None,
+                new_chat_members: None,
+                left_chat_member: None,
+            }),
+            inline_message_id: None,
+            chat_instance: Some("inst-approve".to_owned()),
+            data: Some(format!("{APPROVAL_CALLBACK_PREFIX}held-act-99:approve")),
+        }),
+        message_reaction: None,
+    };
+
+    let event = body
+        .translate_update_event(&approve_upd, None)
+        .unwrap()
+        .expect("approval event emitted");
+    let outbound = match event {
+        OutboundTelegramEvent::ApprovalResolve(out) => out,
+        other => panic!("expected ApprovalResolve, got {other:?}"),
+    };
+    assert_eq!(outbound.params.action_id, ActionId::new("held-act-99"));
+    assert_eq!(outbound.params.h_act, HAct::new("sha256:deadbeef"));
+    assert_eq!(outbound.params.state_epoch, 7);
+    assert!(outbound.params.approved);
+    assert_eq!(outbound.params.resolver, ActorId::new("tg:user:9001"));
+    assert_eq!(outbound.params.resolved_at_ms.as_millis(), 1_700_000_500_000);
+    assert!(outbound.params.out_of_band_channel);
+
+    assert!(body.transport().snapshot_calls().iter().any(|c| matches!(
+        c,
+        RecordedCall::AnswerCallbackQuery {
+            callback_query_id,
+            text: Some(txt),
+            ..
+        } if callback_query_id == "cbq-approve-1" && txt == "Approval submitted"
+    )));
+
+    // 3. Mark resolved -> clears buttons via editMessageText and prevents duplicate resolution
+    body.mark_approval_resolved("held-act-99", true, &outbound.params.resolver);
+    assert!(body.pending_approval("held-act-99").is_none());
+    assert!(body.transport().snapshot_calls().iter().any(|c| matches!(
+        c,
+        RecordedCall::EditMessageText {
+            chat_id: 42,
+            message_id,
+            text,
+            buttons: Some(btns),
+            ..
+        } if *message_id == prompt_msg_id
+            && text.contains("Approved by tg:user:9001")
+            && btns.is_empty()
+    )));
+
+    // Re-tapping after resolution answers "Approval expired or unknown" and emits nothing
+    let stale_res = body.translate_update_event(&approve_upd, None).unwrap();
+    assert!(stale_res.is_none());
+    assert!(body.transport().snapshot_calls().iter().any(|c| matches!(
+        c,
+        RecordedCall::AnswerCallbackQuery {
+            callback_query_id,
+            text: Some(txt),
+            ..
+        } if callback_query_id == "cbq-approve-1" && txt == "Approval expired or unknown"
+    )));
+
+    // 4. Deny button path with per-action custom labels
+    let deny_prompt = body
+        .execute(make_exec(
+            "act-prompt-2",
+            "approval.prompt",
+            "tg:group:-100555",
+            json!({
+                "action_id": "held-act-deny",
+                "h_act": "sha256:cafebabe",
+                "state_epoch": 12,
+                "capability_id": "ros2.move",
+                "summary": "Move arm",
+                "expires_at_ms": 1_700_000_999_000u64,
+                "approve_label": "Allow",
+                "deny_label": "Reject"
+            })
+            .to_string()
+            .into_bytes(),
+        ))
+        .unwrap();
+    assert_eq!(deny_prompt.receipt.unwrap().outcome, ReceiptOutcome::Done);
+
+    let deny_upd = TgUpdate {
+        update_id: 502,
+        message: None,
+        edited_message: None,
+        callback_query: Some(TgCallbackQuery {
+            id: "cbq-deny-1".to_owned(),
+            from: TgUser {
+                id: 9002,
+                is_bot: false,
+                first_name: "Reviewer".to_owned(),
+                last_name: None,
+                username: None,
+            },
+            message: None,
+            inline_message_id: None,
+            chat_instance: None,
+            data: Some(format!("{APPROVAL_CALLBACK_PREFIX}held-act-deny:deny")),
+        }),
+        message_reaction: None,
+    };
+    let deny_event = body
+        .translate_update_event(&deny_upd, None)
+        .unwrap()
+        .expect("deny event emitted");
+    match deny_event {
+        OutboundTelegramEvent::ApprovalResolve(out) => {
+            assert_eq!(out.params.action_id, ActionId::new("held-act-deny"));
+            assert_eq!(out.params.h_act, HAct::new("sha256:cafebabe"));
+            assert_eq!(out.params.state_epoch, 12);
+            assert!(!out.params.approved);
+            assert_eq!(out.params.resolver, ActorId::new("tg:user:9002"));
+        }
+        other => panic!("expected ApprovalResolve, got {other:?}"),
+    }
+
+    // 5. Normal non-approval callback_query continues emitting percept/emit
+    let normal_cb = TgUpdate {
+        update_id: 503,
+        message: None,
+        edited_message: None,
+        callback_query: Some(TgCallbackQuery {
+            id: "cbq-normal-1".to_owned(),
+            from: TgUser {
+                id: 42,
+                is_bot: false,
+                first_name: "Bob".to_owned(),
+                last_name: None,
+                username: None,
+            },
+            message: None,
+            inline_message_id: None,
+            chat_instance: None,
+            data: Some("menu:settings".to_owned()),
+        }),
+        message_reaction: None,
+    };
+    match body.translate_update_event(&normal_cb, None).unwrap() {
+        Some(OutboundTelegramEvent::Percept(p)) => {
+            let v: Value = serde_json::from_slice(p.payload.as_bytes()).unwrap();
+            assert_eq!(v["kind"], json!("callback_query"));
+            assert_eq!(v["callback_data"], json!("menu:settings"));
+        }
+        other => panic!("expected normal Percept, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_mock_http_approval_prompt_and_callback_resolve() {
+    #[derive(Clone, Debug)]
+    struct HttpCall {
+        path: String,
+        body: String,
+    }
+
+    let captured: Arc<Mutex<Vec<HttpCall>>> = Arc::new(Mutex::new(Vec::new()));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let cap_srv = Arc::clone(&captured);
+
+    let srv = tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let cap = Arc::clone(&cap_srv);
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                let mut header_end = None;
+                let mut content_len = 0usize;
+                loop {
+                    let n = match sock.read(&mut tmp).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => n,
+                    };
+                    buf.extend_from_slice(&tmp[..n]);
+                    if header_end.is_none()
+                        && let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n")
+                    {
+                        header_end = Some(pos + 4);
+                        let headers = String::from_utf8_lossy(&buf[..pos]);
+                        for line in headers.lines() {
+                            if let Some((k, v)) = line.split_once(':')
+                                && k.trim().eq_ignore_ascii_case("content-length")
+                            {
+                                content_len = v.trim().parse::<usize>().unwrap_or(0);
+                            }
+                        }
+                    }
+                    if let Some(hend) = header_end
+                        && buf.len() >= hend + content_len
+                    {
+                        break;
+                    }
+                }
+                let hend = header_end.unwrap();
+                let head = String::from_utf8_lossy(&buf[..hend]);
+                let path = head
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("/")
+                    .to_owned();
+                let body = String::from_utf8_lossy(&buf[hend..hend + content_len]).into_owned();
+                cap.lock().unwrap().push(HttpCall {
+                    path: path.clone(),
+                    body,
+                });
+
+                let resp_json = if path.ends_with("/sendMessage") {
+                    json!({
+                        "ok": true,
+                        "result": { "message_id": 888, "date": 1700000500, "chat": { "id": 42, "type": "private" } }
+                    })
+                } else {
+                    json!({ "ok": true, "result": true })
+                };
+                let bytes = resp_json.to_string().into_bytes();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = sock.write_all(reply.as_bytes()).await;
+                let _ = sock.write_all(&bytes).await;
+            });
+        }
+    });
+
+    let api_base = format!("http://{addr}");
+    tokio::task::spawn_blocking(move || {
+        let transport = LiveTelegramTransport::new(api_base, "tok-approval").unwrap();
+        let mut body = TelegramBody::new(BodyId::new("body-telegram"), transport);
+        body.set_now_ms(1_700_000_600_000);
+
+        let res = body
+            .execute(make_exec(
+                "act-http-ap",
+                "approval.prompt",
+                "tg:dm:42",
+                json!({
+                    "action_id": "http-held-1",
+                    "h_act": "sha256:112233",
+                    "state_epoch": 3,
+                    "capability_id": "shell.exec",
+                    "summary": "Run echo hello",
+                    "expires_at_ms": 1_700_000_900_000u64
+                })
+                .to_string()
+                .into_bytes(),
+            ))
+            .unwrap();
+        assert_eq!(res.receipt.unwrap().outcome, ReceiptOutcome::Done);
+
+        let upd = TgUpdate {
+            update_id: 700,
+            message: None,
+            edited_message: None,
+            callback_query: Some(TgCallbackQuery {
+                id: "cbq-http-1".to_owned(),
+                from: TgUser {
+                    id: 777,
+                    is_bot: false,
+                    first_name: "Alice".to_owned(),
+                    last_name: None,
+                    username: None,
+                },
+                message: None,
+                inline_message_id: None,
+                chat_instance: None,
+                data: Some("monoagens:approval:http-held-1:approve".to_owned()),
+            }),
+            message_reaction: None,
+        };
+        let ev = body.translate_update_event(&upd, None).unwrap().unwrap();
+        match ev {
+            OutboundTelegramEvent::ApprovalResolve(out) => {
+                assert_eq!(out.params.action_id, ActionId::new("http-held-1"));
+                assert_eq!(out.params.h_act, HAct::new("sha256:112233"));
+                assert_eq!(out.params.state_epoch, 3);
+                assert!(out.params.approved);
+                assert_eq!(out.params.resolver, ActorId::new("tg:user:777"));
+                body.mark_approval_resolved("http-held-1", true, &out.params.resolver);
+            }
+            other => panic!("expected ApprovalResolve, got {other:?}"),
+        }
+    })
+    .await
+    .unwrap();
+
+    srv.abort();
+
+    let calls = captured.lock().unwrap();
+    let send_msg = calls
+        .iter()
+        .find(|c| c.path.ends_with("/sendMessage"))
+        .expect("sendMessage called");
+    let send_val: Value = serde_json::from_str(&send_msg.body).unwrap();
+    assert_eq!(
+        send_val["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+        json!("monoagens:approval:http-held-1:approve")
+    );
+    assert_eq!(
+        send_val["reply_markup"]["inline_keyboard"][0][1]["callback_data"],
+        json!("monoagens:approval:http-held-1:deny")
+    );
+
+    let ack = calls
+        .iter()
+        .find(|c| c.path.ends_with("/answerCallbackQuery"))
+        .expect("answerCallbackQuery called");
+    let ack_val: Value = serde_json::from_str(&ack.body).unwrap();
+    assert_eq!(ack_val["text"], json!("Approval submitted"));
+
+    assert!(calls.iter().any(|c| c.path.ends_with("/editMessageText")));
 }

@@ -10,7 +10,12 @@ use crate::quiet_hours::{
     DIGEST_HOURS_LOCAL, EMERGENCY_URGENCY_CUTOFF, IMMEDIATE_URGENCY_CUTOFF, PROACTIVE_DAILY_CAP,
     QUIET_END_HOUR, QUIET_START_HOUR,
 };
+use crate::rbac::RbacConfig;
 use crate::roles::{PHYSICAL_PRESENCE_TTL_S, PHYSICAL_ROOM_RADIUS_M, ROOM_PRESENCE_TTL_S};
+
+const fn default_true() -> bool {
+    true
+}
 
 /// Default consecutive automated-turn brake threshold per place (`C-14`).
 pub const DEFAULT_MAX_CONSECUTIVE_AUTOMATED_TURNS: u32 = 4;
@@ -53,6 +58,7 @@ pub enum ValveRuleToggle {
     QuietHours,
     ProactiveCap,
     PeerLoopBrake,
+    Rbac,
 }
 
 impl ValveRuleToggle {
@@ -70,6 +76,7 @@ impl ValveRuleToggle {
             Self::QuietHours => "quiet_hours",
             Self::ProactiveCap => "proactive_cap",
             Self::PeerLoopBrake => "peer_loop_brake",
+            Self::Rbac => "rbac",
         }
     }
 }
@@ -113,6 +120,12 @@ pub struct ValveConfig {
     pub emergency_urgency_cutoff: f64,
     pub immediate_urgency_cutoff: f64,
     pub digest_hours_local: [u8; 3],
+
+    // Generic RBAC narrowing
+    #[serde(default = "default_true")]
+    pub rbac_enabled: bool,
+    #[serde(default)]
+    pub rbac: Option<RbacConfig>,
 }
 
 impl Default for ValveConfig {
@@ -148,6 +161,8 @@ impl Default for ValveConfig {
             emergency_urgency_cutoff: EMERGENCY_URGENCY_CUTOFF,
             immediate_urgency_cutoff: IMMEDIATE_URGENCY_CUTOFF,
             digest_hours_local: DIGEST_HOURS_LOCAL,
+            rbac_enabled: true,
+            rbac: None,
         }
     }
 }
@@ -169,6 +184,7 @@ impl ValveConfig {
             quiet_hours_enabled: false,
             proactive_cap_enabled: false,
             peer_loop_brake_enabled: false,
+            rbac_enabled: false,
             ..Self::default()
         }
     }
@@ -191,6 +207,7 @@ impl ValveConfig {
             ValveRuleToggle::QuietHours => self.quiet_hours_enabled,
             ValveRuleToggle::ProactiveCap => self.proactive_cap_enabled,
             ValveRuleToggle::PeerLoopBrake => self.peer_loop_brake_enabled,
+            ValveRuleToggle::Rbac => self.rbac_enabled,
         }
     }
 
@@ -207,6 +224,7 @@ impl ValveConfig {
             || self.quiet_hours_enabled
             || self.proactive_cap_enabled
             || self.peer_loop_brake_enabled
+            || (self.rbac_enabled && self.rbac.is_some())
     }
 
     /// Returns the effective mode label (`"off"` when `ValveMode::Off` or no rules are enabled).
@@ -233,6 +251,7 @@ impl ValveConfig {
             ValveRuleToggle::QuietHours => &mut self.quiet_hours_enabled,
             ValveRuleToggle::ProactiveCap => &mut self.proactive_cap_enabled,
             ValveRuleToggle::PeerLoopBrake => &mut self.peer_loop_brake_enabled,
+            ValveRuleToggle::Rbac => &mut self.rbac_enabled,
         };
         let prev = *slot;
         *slot = enabled;

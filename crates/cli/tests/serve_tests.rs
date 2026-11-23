@@ -23,6 +23,7 @@ fn write_mock_stdio_body_script(dir: &Path) -> PathBuf {
     let src = r#"#!/usr/bin/env python3
 import argparse
 import json
+import os
 import sys
 import threading
 import time
@@ -33,6 +34,8 @@ parser.add_argument("--cap-id", default="wa.send")
 parser.add_argument("--log-file", required=True)
 parser.add_argument("--emit-place", default="")
 parser.add_argument("--emit-actor", default="alice")
+parser.add_argument("--meta-kind", default="")
+parser.add_argument("--meta-cmd", default="")
 args = parser.parse_args()
 
 write_lock = threading.Lock()
@@ -85,28 +88,48 @@ for raw in sys.stdin:
     params = msg.get("params", {})
 
     if method == "body/discover":
-        log_event({"type": "discover", "body_id": args.body_id})
+        log_event({
+            "type": "discover",
+            "body_id": args.body_id,
+            "plugin_config": os.environ.get("MONOAGENS_PLUGIN_CONFIG"),
+            "plugin_state_dir": os.environ.get("MONOAGENS_PLUGIN_STATE_DIR"),
+            "body_state_dir": os.environ.get("MONOAGENS_BODY_STATE_DIR"),
+            "rbac_enabled": os.environ.get("MONOAGENS_RBAC_ENABLED"),
+        })
+        discover_result = {
+            "body_id": args.body_id,
+            "protocol_version": {"major": 1, "minor": 0},
+            "places": [],
+            "capabilities": [{
+                "id": args.cap_id,
+                "description": "Mock channel send",
+                "places": [],
+                "flags": {
+                    "communicative": True,
+                    "identity_changing": False,
+                    "irreversible": False,
+                },
+                "typical_latency_ms": 5,
+                "capability_schema_hash": "mock-h1",
+                "sensed_effect": None,
+            }],
+        }
+        meta = {}
+        if args.meta_kind:
+            meta["kind"] = args.meta_kind
+        if args.meta_cmd:
+            meta["commands"] = [{
+                "name": args.meta_cmd,
+                "summary": "Mock plugin command",
+                "permission": f"plugin.{args.meta_cmd}",
+                "base_tier": "member",
+            }]
+        if meta:
+            discover_result["_meta"] = meta
         send_json({
             "jsonrpc": "2.0",
             "id": rpc_id,
-            "result": {
-                "body_id": args.body_id,
-                "protocol_version": {"major": 1, "minor": 0},
-                "places": [],
-                "capabilities": [{
-                    "id": args.cap_id,
-                    "description": "Mock channel send",
-                    "places": [],
-                    "flags": {
-                        "communicative": True,
-                        "identity_changing": False,
-                        "irreversible": False,
-                    },
-                    "typical_latency_ms": 5,
-                    "capability_schema_hash": "mock-h1",
-                    "sensed_effect": None,
-                }],
-            },
+            "result": discover_result,
         })
         if args.emit_place and not emitted:
             emitted = True
@@ -557,4 +580,197 @@ args = ["{}", "--body-id", "wa-e2e-body", "--cap-id", "wa.send", "--log-file", "
         events.iter().any(|e| e["type"] == "shutdown"),
         "expected clean body/shutdown in {events:?}"
     );
+}
+
+#[test]
+fn cli_serve_unified_plugins_rbac_env_injection_and_dependency_skip() {
+    let tmp = TempDir::new().expect("tempdir");
+    let script = write_mock_stdio_body_script(tmp.path());
+    let tg_log = tmp.path().join("tg_plugin.jsonl");
+    let cap_log = tmp.path().join("cap_plugin.jsonl");
+    let skipped_log = tmp.path().join("skipped_plugin.jsonl");
+
+    let extra_toml = format!(
+        r#"
+[roles]
+fallback = "guest"
+
+[roles.guest]
+base = "guest"
+allow = ["command.help", "identity.whoami"]
+
+[roles.member]
+base = "member"
+allow = ["chat.*", "plugin.search"]
+
+[roles.owner]
+base = "owner"
+allow = ["*"]
+
+[[person]]
+actor_id = "per_owner"
+owner = true
+roles = ["owner"]
+accounts = [
+  {{ body_id = "tg-mock", account_id = "tg:user:1001" }},
+]
+
+[plugins.tg-adapter]
+kind = "adapter"
+transport = "stdio"
+command = "python3"
+args = ["{}", "--body-id", "tg-mock", "--cap-id", "chat.speak", "--log-file", "{}", "--meta-kind", "adapter"]
+
+[plugins.cap-search]
+kind = "capability"
+dependencies = ["tg-adapter", "rbac"]
+transport = "stdio"
+command = "python3"
+args = ["{}", "--body-id", "cap-search-mock", "--cap-id", "search.web", "--log-file", "{}", "--meta-kind", "capability", "--meta-cmd", "search"]
+
+[plugins.cap-missing-dep]
+kind = "capability"
+dependencies = ["nonexistent-dep"]
+transport = "stdio"
+command = "python3"
+args = ["{}", "--body-id", "cap-missing-mock", "--cap-id", "missing.run", "--log-file", "{}"]
+"#,
+        script.display(),
+        tg_log.display(),
+        script.display(),
+        cap_log.display(),
+        script.display(),
+        skipped_log.display(),
+    );
+
+    let (cfg_path, data_dir) = write_serve_config(tmp.path(), "", &extra_toml);
+
+    let out = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "serve",
+            "--exit-after-ms",
+            "300",
+        ])
+        .output()
+        .expect("run monoagens serve with [plugins.*] and [roles]");
+
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let report: Value = serde_json::from_slice(&out.stdout).expect("pure JSON stdout");
+    assert_eq!(report["status"], "running");
+    assert_eq!(report["connected_count"], 2);
+    assert_eq!(report["failed_count"], 0);
+    assert_eq!(report["skipped_count"], 1);
+    assert_eq!(report["rbac_enabled"], true);
+
+    let cmds: Vec<&str> = report["indexed_commands"]
+        .as_array()
+        .expect("indexed_commands array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(cmds.contains(&"help"), "expected 'help' in {cmds:?}");
+    assert!(cmds.contains(&"whoami"), "expected 'whoami' in {cmds:?}");
+    assert!(cmds.contains(&"roles"), "expected 'roles' in {cmds:?}");
+    assert!(cmds.contains(&"approve"), "expected 'approve' in {cmds:?}");
+    assert!(cmds.contains(&"deny"), "expected 'deny' in {cmds:?}");
+    assert!(cmds.contains(&"search"), "expected 'search' in {cmds:?}");
+
+    let entries = report["bodies"].as_array().expect("bodies array");
+    assert_eq!(entries.len(), 3);
+
+    let find_entry = |id: &str| -> &Value {
+        entries
+            .iter()
+            .find(|e| e["config_id"] == id)
+            .unwrap_or_else(|| panic!("missing '{id}' in {entries:?}"))
+    };
+    let tg_entry = find_entry("tg-adapter");
+    assert_eq!(tg_entry["kind"], "adapter");
+    assert_eq!(tg_entry["status"], "connected");
+    assert_eq!(tg_entry["body_id"], "tg-mock");
+
+    let cap_entry = find_entry("cap-search");
+    assert_eq!(cap_entry["kind"], "capability");
+    assert_eq!(cap_entry["status"], "connected");
+    assert_eq!(cap_entry["body_id"], "cap-search-mock");
+
+    let skipped_entry = find_entry("cap-missing-dep");
+    assert_eq!(skipped_entry["kind"], "capability");
+    assert_eq!(skipped_entry["status"], "skipped");
+    assert!(
+        skipped_entry["error"]
+            .as_str()
+            .is_some_and(|s| s.contains("nonexistent-dep")),
+        "expected missing dependency reason in {skipped_entry:?}"
+    );
+
+    assert!(
+        read_mock_log(&skipped_log).is_empty(),
+        "skipped plugin must never be spawned"
+    );
+
+    for (plugin_id, log_path) in [("tg-adapter", &tg_log), ("cap-search", &cap_log)] {
+        let events = read_mock_log(log_path);
+        let discover = events
+            .iter()
+            .find(|e| e["type"] == "discover")
+            .unwrap_or_else(|| panic!("expected discover for {plugin_id} in {events:?}"));
+        let expected_cfg = tmp
+            .path()
+            .join("plugins")
+            .join(format!("{plugin_id}.toml"));
+        let expected_state = data_dir.join("plugins").join(plugin_id);
+        assert_eq!(
+            discover["plugin_config"],
+            json!(expected_cfg.display().to_string())
+        );
+        assert_eq!(
+            discover["plugin_state_dir"],
+            json!(expected_state.display().to_string())
+        );
+        assert_eq!(
+            discover["body_state_dir"],
+            json!(expected_state.display().to_string())
+        );
+        assert_eq!(discover["rbac_enabled"], json!("1"));
+        assert!(
+            events.iter().any(|e| e["type"] == "shutdown"),
+            "expected clean shutdown for {plugin_id}: {events:?}"
+        );
+    }
+
+    // Verify `--plugin` CLI flag selects a single `[plugins.<id>]` entry identically to `--body`.
+    let filtered_log = tmp.path().join("tg_filtered.jsonl");
+    let single_out = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "serve",
+            "--plugin",
+            "tg-adapter",
+            "--exit-after-ms",
+            "150",
+        ])
+        .output()
+        .expect("run serve --plugin tg-adapter");
+    assert!(
+        single_out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&single_out.stderr)
+    );
+    let _ = filtered_log;
+    let single_report: Value = serde_json::from_slice(&single_out.stdout).expect("filtered json");
+    assert_eq!(single_report["connected_count"], 1);
+    assert_eq!(single_report["skipped_count"], 0);
+    assert_eq!(single_report["bodies"].as_array().unwrap().len(), 1);
+    assert_eq!(single_report["bodies"][0]["config_id"], "tg-adapter");
 }

@@ -11,13 +11,14 @@ use std::time::Duration;
 
 use body_telegram::{
     BlobResolver, BlobStager, DEFAULT_BODY_ID, DEFAULT_TELEGRAM_API_BASE, LiveTelegramTransport,
-    OfflineTelegramTransport, StagedBlob, TelegramBody, TelegramTransport,
+    OfflineTelegramTransport, OutboundTelegramEvent, StagedBlob, TelegramBody, TelegramPluginConfig,
+    TelegramTransport, resolve_state_dir_from_env,
 };
 use clap::Parser;
-use monoagens_body_kit::{PersistentBodyRuntime, load_state_dir_from_env};
+use monoagens_body_kit::PersistentBodyRuntime;
 use monoagens_body_sdk::{
-    BlobGetResult, BlobPutResult, BodyId, InboundFrame, OutboundBuilder, PlaceId, RpcId,
-    Waist2Response, parse_inbound_line, verify_blob_get,
+    ApprovalResolveResult, BlobGetResult, BlobPutResult, BodyId, InboundFrame, OutboundBuilder,
+    PlaceId, RpcId, Waist2Response, parse_inbound_line, verify_blob_get,
 };
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
@@ -129,9 +130,18 @@ impl BlobStager for StdioRpcBridge {
     }
 }
 
+fn load_plugin_config() -> TelegramPluginConfig {
+    TelegramPluginConfig::load_or_init_from_env().unwrap_or_else(|err| {
+        eprintln!("body-telegram config warning: {err}");
+        TelegramPluginConfig::default()
+    })
+}
+
 fn run_offline(args: CliArgs) -> Result<(), String> {
-    let mut runtime = PersistentBodyRuntime::new(load_state_dir_from_env());
-    let mut body = TelegramBody::new(BodyId::new(args.body_id), OfflineTelegramTransport::new());
+    let config = load_plugin_config();
+    let mut runtime = PersistentBodyRuntime::new(resolve_state_dir_from_env());
+    let mut body = TelegramBody::new(BodyId::new(args.body_id), OfflineTelegramTransport::new())
+        .with_config(config);
     if !args.place.is_empty() {
         body = body.with_places(args.place.into_iter().map(PlaceId::new).collect());
     }
@@ -143,6 +153,8 @@ fn run_offline(args: CliArgs) -> Result<(), String> {
 }
 
 fn run_live(args: CliArgs, token: String) -> Result<(), String> {
+    let config = load_plugin_config();
+    let poll_timeout_secs = config.poll_timeout_secs;
     let transport = LiveTelegramTransport::new(args.api_base.clone(), token.clone())?;
     let mut poll_transport = LiveTelegramTransport::new(args.api_base, token)?;
 
@@ -159,6 +171,7 @@ fn run_live(args: CliArgs, token: String) -> Result<(), String> {
     let bridge = StdioRpcBridge::new(stdout_tx.clone(), Arc::clone(&pending), "tg");
 
     let mut body = TelegramBody::new(BodyId::new(&args.body_id), transport)
+        .with_config(config)
         .with_blob_resolver(Arc::new(bridge.clone()))
         .with_shutdown_flag(Arc::clone(&shutdown));
     if !args.place.is_empty() {
@@ -169,7 +182,7 @@ fn run_live(args: CliArgs, token: String) -> Result<(), String> {
     }
 
     let state_runtime = Arc::new(Mutex::new(PersistentBodyRuntime::new(
-        load_state_dir_from_env(),
+        resolve_state_dir_from_env(),
     )));
     let body_shared = Arc::new(Mutex::new(body));
 
@@ -183,24 +196,59 @@ fn run_live(args: CliArgs, token: String) -> Result<(), String> {
         .spawn(move || {
             let mut offset: Option<i64> = None;
             while !shutdown_poll.load(Ordering::SeqCst) {
-                match poll_transport.get_updates(offset, 20) {
+                match poll_transport.get_updates(offset, poll_timeout_secs) {
                     Ok(updates) => {
                         for upd in updates {
                             offset = Some(upd.update_id.saturating_add(1));
                             let translated = {
                                 let mut guard = body_poll.lock().expect("body lock");
-                                guard.translate_update(&upd, Some(&mut stager_poll))
+                                guard.translate_update_event(&upd, Some(&mut stager_poll))
                             };
                             match translated {
-                                Ok(Some(percept_params)) => {
+                                Ok(Some(OutboundTelegramEvent::Percept(percept_params))) => {
                                     if let Err(err) = rpc_poll.call_blocking(|b| {
                                         monoagens_body_sdk::Waist2Request::new(
                                             Some(b.next_rpc_id()),
                                             monoagens_body_sdk::Waist2Method::PerceptEmit,
-                                            percept_params,
+                                            *percept_params,
                                         )
                                     }) {
                                         eprintln!("body-telegram percept/emit failed: {err}");
+                                    }
+                                }
+                                Ok(Some(OutboundTelegramEvent::ApprovalResolve(outbound))) => {
+                                    let action_id = outbound.params.action_id.as_str().to_owned();
+                                    let approved = outbound.params.approved;
+                                    let resolver = outbound.params.resolver.clone();
+                                    match rpc_poll.call_blocking(|b| {
+                                        monoagens_body_sdk::Waist2Request::new(
+                                            Some(b.next_rpc_id()),
+                                            monoagens_body_sdk::Waist2Method::ApprovalResolve,
+                                            outbound.params,
+                                        )
+                                    }) {
+                                        Ok(val) => {
+                                            match serde_json::from_value::<ApprovalResolveResult>(val) {
+                                                Ok(res) if res.applied => {
+                                                    let mut guard =
+                                                        body_poll.lock().expect("body lock");
+                                                    guard.mark_approval_resolved(
+                                                        &action_id,
+                                                        approved,
+                                                        &resolver,
+                                                    );
+                                                }
+                                                Ok(_) => {}
+                                                Err(err) => {
+                                                    eprintln!(
+                                                        "body-telegram invalid approval/resolve result: {err}"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            eprintln!("body-telegram approval/resolve failed: {err}");
+                                        }
                                     }
                                 }
                                 Ok(None) => {}

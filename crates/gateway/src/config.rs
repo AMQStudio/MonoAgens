@@ -2,15 +2,20 @@
 //! range validation, and `toml_edit` format-preserving updates after backup.
 
 use core::fmt;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use monoagens_protocol::{ActorId, BodyId, CURRENT_PROTOCOL_VERSION, ProtocolVersion};
+use monoagens_protocol::{ActorId, BodyId, CURRENT_PROTOCOL_VERSION, PlaceId, ProtocolVersion};
 use monoagens_reason::{EMBEDDING_GEMMA_2_DIM, EMBEDDING_GEMMA_2_VER, ProviderSecrets};
 use monoagens_core::blake3;
 use monoagens_store::{
     ConfigLoadError, LoadedCoreConfig, load_core_config_or_default,
 };
-use toml_edit::{DocumentMut, Item, Table, TableLike, value};
+use monoagens_valve::{
+    ApprovalMode, PlaceAccessRule, RbacConfig, RoleDefinition, RoleTier,
+};
+use serde::{Deserialize, Serialize};
+use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue, value};
 
 use crate::cues::{DEFAULT_PROGRESS_NOTE_MS, DEFAULT_WORKING_CUE_MS};
 use crate::secrets::{SecretsLoadError, load_provider_secrets, validate_no_inline_secrets_in_toml};
@@ -54,18 +59,88 @@ impl ModelProviderKind {
     }
 }
 
-/// Transport kind for an external plugin body declared in `[[bodies]]`.
+/// Transport kind for an external plugin body declared in `[[bodies]]` or `[plugins.<id>]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyTransportConfig {
     Stdio { command: String, args: Vec<String> },
     UnixSocket { path: PathBuf },
 }
 
-/// Configured external body plugin entry in `monoagens.toml`.
+/// Configured external body plugin entry in `monoagens.toml` (`[[bodies]]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BodyPluginConfig {
     pub id: String,
     pub transport: BodyTransportConfig,
+}
+
+/// Unified plugin category declared in `[plugins.<id>].kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginKind {
+    #[default]
+    Adapter,
+    Capability,
+}
+
+impl PluginKind {
+    /// Canonical string identifier stored in `monoagens.toml`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Adapter => "adapter",
+            Self::Capability => "capability",
+        }
+    }
+
+    /// Parses `"adapter"` or `"capability"` case-insensitively.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let norm = raw.trim();
+        if norm.eq_ignore_ascii_case("adapter") {
+            Some(Self::Adapter)
+        } else if norm.eq_ignore_ascii_case("capability") {
+            Some(Self::Capability)
+        } else {
+            None
+        }
+    }
+}
+
+/// Unified plugin configuration entry parsed from `[plugins.<id>]` or converted from `[[bodies]]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginConfig {
+    pub id: String,
+    pub enabled: bool,
+    pub kind: PluginKind,
+    pub transport: BodyTransportConfig,
+    pub dependencies: Vec<String>,
+    pub optional_dependencies: Vec<String>,
+}
+
+impl From<BodyPluginConfig> for PluginConfig {
+    fn from(body: BodyPluginConfig) -> Self {
+        Self {
+            id: body.id,
+            enabled: true,
+            kind: PluginKind::Adapter,
+            transport: body.transport,
+            dependencies: Vec::new(),
+            optional_dependencies: Vec::new(),
+        }
+    }
+}
+
+impl From<&BodyPluginConfig> for PluginConfig {
+    fn from(body: &BodyPluginConfig) -> Self {
+        Self {
+            id: body.id.clone(),
+            enabled: true,
+            kind: PluginKind::Adapter,
+            transport: body.transport.clone(),
+            dependencies: Vec::new(),
+            optional_dependencies: Vec::new(),
+        }
+    }
 }
 
 /// Runtime bounds and lifecycle cue timings.
@@ -175,6 +250,7 @@ pub struct PersonMappingConfig {
     pub actor_id: ActorId,
     pub is_owner: bool,
     pub accounts: Vec<PersonAccountConfig>,
+    pub roles: Vec<String>,
 }
 
 /// Cross-body identity linking configuration (`4.3`, `R-44`).
@@ -284,6 +360,8 @@ pub struct GatewayConfig {
     pub identity: IdentityConfig,
     pub persons: Vec<PersonMappingConfig>,
     pub bodies: Vec<BodyPluginConfig>,
+    pub plugins: Vec<PluginConfig>,
+    pub rbac: Option<RbacConfig>,
 }
 
 impl Default for GatewayConfig {
@@ -300,11 +378,31 @@ impl Default for GatewayConfig {
             identity: IdentityConfig::default(),
             persons: Vec::new(),
             bodies: Vec::new(),
+            plugins: Vec::new(),
+            rbac: None,
         }
     }
 }
 
 impl GatewayConfig {
+    /// Returns the unified list of configured plugins, merging `[plugins.<id>]` entries
+    /// with legacy `[[bodies]]` aliases (`[plugins.<id>]` takes precedence on duplicate `id`).
+    #[must_use]
+    pub fn effective_plugins(&self) -> Vec<PluginConfig> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::with_capacity(self.plugins.len() + self.bodies.len());
+        for plugin in &self.plugins {
+            if seen.insert(plugin.id.clone()) {
+                out.push(plugin.clone());
+            }
+        }
+        for body in &self.bodies {
+            if seen.insert(body.id.clone()) {
+                out.push(PluginConfig::from(body));
+            }
+        }
+        out
+    }
     /// Parses a 64-character lowercase/uppercase hex `BLAKE3` digest into `[u8; 32]`.
     pub fn parse_blake3_hex(raw: &str) -> Result<[u8; 32], ConfigError> {
         let s = raw.trim();
@@ -1050,36 +1148,50 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
                     expected: "non-empty body id",
                 });
             }
-            let transport_kind = get_opt_str(tbl, "transport", &format!("{prefix}.transport"))?
-                .unwrap_or_else(|| "stdio".to_owned());
-            let transport = match transport_kind.trim() {
-                "stdio" => {
-                    let command = get_opt_str(tbl, "command", &format!("{prefix}.command"))?
-                        .ok_or_else(|| ConfigError::MissingField {
-                            key: format!("{prefix}.command"),
-                        })?;
-                    let args = get_opt_str_array(tbl, "args", &format!("{prefix}.args"))?;
-                    BodyTransportConfig::Stdio { command, args }
-                }
-                "unix" | "unix_socket" => {
-                    let socket_path =
-                        get_opt_str(tbl, "socket_path", &format!("{prefix}.socket_path"))?
-                            .ok_or_else(|| ConfigError::MissingField {
-                                key: format!("{prefix}.socket_path"),
-                            })?;
-                    BodyTransportConfig::UnixSocket {
-                        path: PathBuf::from(socket_path),
-                    }
-                }
-                other => {
-                    return Err(ConfigError::InvalidValue {
-                        key: format!("{prefix}.transport"),
-                        value: other.to_owned(),
-                        expected: "'stdio' or 'unix_socket'",
-                    });
-                }
-            };
+            let transport = parse_transport_table(tbl, &prefix, false)?;
             cfg.bodies.push(BodyPluginConfig { id, transport });
+        }
+    }
+
+    if let Some(plugins_tbl) = get_opt_table(root, "plugins")? {
+        for (plugin_id, item) in plugins_tbl.iter() {
+            let trimmed_id = plugin_id.trim();
+            if trimmed_id.is_empty() {
+                return Err(ConfigError::InvalidValue {
+                    key: "plugins".to_owned(),
+                    value: plugin_id.to_owned(),
+                    expected: "non-empty plugin id",
+                });
+            }
+            let prefix = format!("plugins.{trimmed_id}");
+            let tbl = item.as_table_like().ok_or_else(|| ConfigError::InvalidType {
+                key: prefix.clone(),
+                expected: "table [plugins.<id>]",
+            })?;
+            let enabled = get_opt_bool(tbl, "enabled", &format!("{prefix}.enabled"))?.unwrap_or(true);
+            let kind = match get_opt_str(tbl, "kind", &format!("{prefix}.kind"))? {
+                Some(raw_kind) => PluginKind::parse(&raw_kind).ok_or_else(|| ConfigError::InvalidValue {
+                    key: format!("{prefix}.kind"),
+                    value: raw_kind,
+                    expected: "'adapter' or 'capability'",
+                })?,
+                None => PluginKind::Adapter,
+            };
+            let transport = parse_transport_table(tbl, &prefix, true)?;
+            let dependencies = get_opt_str_array(tbl, "dependencies", &format!("{prefix}.dependencies"))?;
+            let optional_dependencies = get_opt_str_array(
+                tbl,
+                "optional_dependencies",
+                &format!("{prefix}.optional_dependencies"),
+            )?;
+            cfg.plugins.push(PluginConfig {
+                id: trimmed_id.to_owned(),
+                enabled,
+                kind,
+                transport,
+                dependencies,
+                optional_dependencies,
+            });
         }
     }
 
@@ -1261,15 +1373,231 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
                     });
                 }
             }
+            let roles = get_opt_str_array(tbl, "roles", &format!("{prefix}.roles"))?;
             cfg.persons.push(PersonMappingConfig {
                 actor_id: ActorId::new(actor_raw),
                 is_owner,
                 accounts,
+                roles,
             });
         }
     }
 
+    let mut rbac = RbacConfig::default();
+    let mut has_rbac = false;
+
+    for person in &cfg.persons {
+        if !person.roles.is_empty() {
+            has_rbac = true;
+            rbac.actor_roles
+                .insert(person.actor_id.clone(), person.roles.clone());
+        }
+    }
+
+    if let Some(roles_tbl) = get_opt_table(root, "roles")? {
+        has_rbac = true;
+        if let Some(fb) = get_opt_str(roles_tbl, "fallback", "roles.fallback")? {
+            if fb.trim().is_empty() {
+                return Err(ConfigError::InvalidValue {
+                    key: "roles.fallback".to_owned(),
+                    value: fb,
+                    expected: "non-empty role name",
+                });
+            }
+            rbac.fallback_role = Some(fb.trim().to_owned());
+        }
+        for (role_name, item) in roles_tbl.iter() {
+            if role_name == "fallback" {
+                continue;
+            }
+            let prefix = format!("roles.{role_name}");
+            let tbl = item.as_table_like().ok_or_else(|| ConfigError::InvalidType {
+                key: prefix.clone(),
+                expected: "table [roles.<name>]",
+            })?;
+            let base = match get_opt_str(tbl, "base", &format!("{prefix}.base"))? {
+                Some(raw_base) => RoleTier::parse_str(&raw_base).ok_or_else(|| {
+                    ConfigError::InvalidValue {
+                        key: format!("{prefix}.base"),
+                        value: raw_base,
+                        expected: "'guest', 'member', 'trusted', 'admin', or 'owner'",
+                    }
+                })?,
+                None => RoleTier::parse_str(role_name).unwrap_or(RoleTier::Guest),
+            };
+            let allow = get_opt_str_array(tbl, "allow", &format!("{prefix}.allow"))?;
+            let deny = get_opt_str_array(tbl, "deny", &format!("{prefix}.deny"))?;
+            let approval = match get_opt_str(tbl, "approval", &format!("{prefix}.approval"))? {
+                Some(raw_app) => Some(ApprovalMode::parse_str(&raw_app).ok_or_else(|| {
+                    ConfigError::InvalidValue {
+                        key: format!("{prefix}.approval"),
+                        value: raw_app,
+                        expected: "'yolo', 'default', or 'strict'",
+                    }
+                })?),
+                None => None,
+            };
+            let label = get_opt_str(tbl, "label", &format!("{prefix}.label"))?;
+            let context = get_opt_str(tbl, "context", &format!("{prefix}.context"))?;
+            let mut settings = BTreeMap::new();
+            if let Some(settings_tbl) = get_opt_table(tbl, "settings")? {
+                for (sk, sv) in settings_tbl.iter() {
+                    let s_key = format!("{prefix}.settings.{sk}");
+                    settings.insert(sk.to_owned(), toml_item_to_json(sv, &s_key)?);
+                }
+            }
+            rbac.roles.insert(
+                role_name.to_owned(),
+                RoleDefinition {
+                    name: role_name.to_owned(),
+                    base,
+                    allow,
+                    deny,
+                    approval,
+                    label,
+                    context,
+                    settings,
+                },
+            );
+        }
+    }
+
+    if let Some(places_tbl) = get_opt_table(root, "places")? {
+        has_rbac = true;
+        for (place_name, item) in places_tbl.iter() {
+            let prefix = format!("places.{place_name}");
+            let tbl = item.as_table_like().ok_or_else(|| ConfigError::InvalidType {
+                key: prefix.clone(),
+                expected: "table [places.\"<place_id>\"]",
+            })?;
+            let allow = get_opt_str_array(tbl, "allow", &format!("{prefix}.allow"))?;
+            let deny = get_opt_str_array(tbl, "deny", &format!("{prefix}.deny"))?;
+            rbac.places
+                .insert(PlaceId::new(place_name), PlaceAccessRule { allow, deny });
+        }
+    }
+
+    if has_rbac {
+        cfg.rbac = Some(rbac);
+    }
+
     Ok(cfg)
+}
+
+fn parse_transport_table(
+    tbl: &dyn TableLike,
+    prefix: &str,
+    infer_transport: bool,
+) -> Result<BodyTransportConfig, ConfigError> {
+    let explicit_transport = get_opt_str(tbl, "transport", &format!("{prefix}.transport"))?;
+    let has_command = tbl.get("command").is_some_and(|i| !i.is_none());
+    let has_socket = tbl.get("socket_path").is_some_and(|i| !i.is_none());
+
+    let transport_kind = match explicit_transport {
+        Some(t) => t,
+        None if infer_transport => {
+            if has_socket && !has_command {
+                "unix_socket".to_owned()
+            } else if has_command && !has_socket {
+                "stdio".to_owned()
+            } else if has_command && has_socket {
+                return Err(ConfigError::InvalidValue {
+                    key: format!("{prefix}.transport"),
+                    value: "ambiguous".to_owned(),
+                    expected: "explicit 'stdio' or 'unix_socket' when both command and socket_path are set",
+                });
+            } else {
+                return Err(ConfigError::MissingField {
+                    key: format!("{prefix}.command"),
+                });
+            }
+        }
+        None => "stdio".to_owned(),
+    };
+
+    match transport_kind.trim() {
+        "stdio" => {
+            let command = get_opt_str(tbl, "command", &format!("{prefix}.command"))?.ok_or_else(
+                || ConfigError::MissingField {
+                    key: format!("{prefix}.command"),
+                },
+            )?;
+            let args = get_opt_str_array(tbl, "args", &format!("{prefix}.args"))?;
+            Ok(BodyTransportConfig::Stdio { command, args })
+        }
+        "unix" | "unix_socket" => {
+            let socket_path = get_opt_str(tbl, "socket_path", &format!("{prefix}.socket_path"))?
+                .ok_or_else(|| ConfigError::MissingField {
+                    key: format!("{prefix}.socket_path"),
+                })?;
+            Ok(BodyTransportConfig::UnixSocket {
+                path: PathBuf::from(socket_path),
+            })
+        }
+        other => Err(ConfigError::InvalidValue {
+            key: format!("{prefix}.transport"),
+            value: other.to_owned(),
+            expected: "'stdio' or 'unix_socket'",
+        }),
+    }
+}
+
+fn toml_item_to_json(item: &Item, key: &str) -> Result<serde_json::Value, ConfigError> {
+    match item {
+        Item::Value(v) => toml_value_to_json(v, key),
+        Item::Table(t) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in t.iter() {
+                map.insert(k.to_owned(), toml_item_to_json(v, &format!("{key}.{k}"))?);
+            }
+            Ok(serde_json::Value::Object(map))
+        }
+        Item::ArrayOfTables(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for (idx, t) in arr.iter().enumerate() {
+                let mut map = serde_json::Map::new();
+                for (k, v) in t.iter() {
+                    map.insert(
+                        k.to_owned(),
+                        toml_item_to_json(v, &format!("{key}[{idx}].{k}"))?,
+                    );
+                }
+                out.push(serde_json::Value::Object(map));
+            }
+            Ok(serde_json::Value::Array(out))
+        }
+        Item::None => Ok(serde_json::Value::Null),
+    }
+}
+
+fn toml_value_to_json(val: &TomlValue, key: &str) -> Result<serde_json::Value, ConfigError> {
+    match val {
+        TomlValue::String(s) => Ok(serde_json::Value::String(s.value().clone())),
+        TomlValue::Integer(i) => Ok(serde_json::Value::Number((*i.value()).into())),
+        TomlValue::Float(f) => serde_json::Number::from_f64(*f.value())
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| ConfigError::InvalidValue {
+                key: key.to_owned(),
+                value: f.value().to_string(),
+                expected: "finite number",
+            }),
+        TomlValue::Boolean(b) => Ok(serde_json::Value::Bool(*b.value())),
+        TomlValue::Datetime(dt) => Ok(serde_json::Value::String(dt.value().to_string())),
+        TomlValue::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for (idx, elem) in arr.iter().enumerate() {
+                out.push(toml_value_to_json(elem, &format!("{key}[{idx}]"))?);
+            }
+            Ok(serde_json::Value::Array(out))
+        }
+        TomlValue::InlineTable(it) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in it.iter() {
+                map.insert(k.to_owned(), toml_value_to_json(v, &format!("{key}.{k}"))?);
+            }
+            Ok(serde_json::Value::Object(map))
+        }
+    }
 }
 
 fn check_u64_range(

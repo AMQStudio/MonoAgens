@@ -8,6 +8,7 @@ pub mod config;
 pub mod hooks;
 pub mod policy;
 pub mod quiet_hours;
+pub mod rbac;
 pub mod reason_tags;
 pub mod roles;
 pub mod self_guide;
@@ -42,6 +43,10 @@ pub use quiet_hours::{
     PROACTIVE_DAILY_CAP, ProactiveCapTracker, ProactiveEvaluation, QUIET_END_HOUR,
     QUIET_START_HOUR, QuietHoursError, evaluate_proactive_notification,
     evaluate_recipient_local_time, is_hour_in_quiet_window, next_digest_slot_ms,
+};
+pub use rbac::{
+    ApprovalMode, PlaceAccessRule, RbacConfig, RbacDecision, RoleDefinition, RoleTier,
+    matches_pattern,
 };
 pub use reason_tags::{
     ValveGuideEntry, ValveReasonTag, build_valve_self_snapshot, valve_guide_entry,

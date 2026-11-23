@@ -28,10 +28,26 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::clock::{Clock, run_with_clock_timeout};
+use crate::commands::{CommandRegistry, CommandSpec};
 use crate::cues::{CueRecorder, WaitCueGuard, spawn_wait_cue_monitor};
 use crate::logging::{DiagnosticSink, LogLevel};
 use crate::runtime::{ControlCommand, IngressQueue};
 use crate::seams::GatewaySeams;
+
+/// Capability ID for generic adapter-rendered approval prompts (`approval.prompt` -> `approval/resolve`).
+pub const CAPABILITY_APPROVAL_PROMPT: &str = "approval.prompt";
+
+/// Generic payload dispatched via `action/execute` to any adapter declaring capability `approval.prompt`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ApprovalPromptRequest {
+    pub action_id: ActionId,
+    pub h_act: monoagens_protocol::HAct,
+    pub state_epoch: u64,
+    pub capability_id: CapabilityId,
+    pub target_places: Vec<PlaceId>,
+    pub summary: String,
+    pub expires_at_ms: Time,
+}
 
 const RPC_METHOD_NOT_FOUND: i32 = -32601;
 const RPC_INVALID_PARAMS: i32 = -32602;
@@ -333,6 +349,7 @@ impl BodyConnection {
 pub struct BodyRouter {
     inner: Arc<Mutex<RouterState>>,
     settlement: ActionSettlementTracker,
+    commands: Arc<Mutex<CommandRegistry>>,
     ingress: IngressQueue,
     seams: GatewaySeams,
     diagnostics: DiagnosticSink,
@@ -371,6 +388,7 @@ impl BodyRouter {
         Self {
             inner: Arc::new(Mutex::new(RouterState::default())),
             settlement: ActionSettlementTracker::new(),
+            commands: Arc::new(Mutex::new(CommandRegistry::new())),
             ingress,
             seams,
             diagnostics,
@@ -382,6 +400,12 @@ impl BodyRouter {
             working_cue_ms,
             progress_note_ms,
         }
+    }
+
+    /// Returns the shared [`CommandRegistry`] populated from built-ins and `body/discover` `_meta.commands`.
+    #[must_use]
+    pub fn command_registry(&self) -> Arc<Mutex<CommandRegistry>> {
+        Arc::clone(&self.commands)
     }
 
     pub(crate) fn set_control_tx(&self, tx: mpsc::UnboundedSender<ControlCommand>) {
@@ -460,8 +484,21 @@ impl BodyRouter {
         command: &str,
         args: &[String],
     ) -> Result<BodyId, BodyRpcError> {
+        self.connect_stdio_process_with_env(command, args, &[]).await
+    }
+
+    /// Connects a child process speaking Waist-2 NDJSON over `stdin`/`stdout` with extra
+    /// injected environment variables (e.g. `MONOAGENS_PLUGIN_CONFIG`), runs `body/discover`
+    /// under `hook_timeout_ms`, and registers it into routing and Core.
+    pub async fn connect_stdio_process_with_env(
+        &self,
+        command: &str,
+        args: &[String],
+        extra_envs: &[(String, String)],
+    ) -> Result<BodyId, BodyRpcError> {
         let mut cmd = Command::new(command);
         cmd.args(args)
+            .envs(extra_envs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -600,7 +637,7 @@ impl BodyRouter {
             alive: Arc::clone(&alive),
         };
 
-        let discover: BodyDiscoverResult = probe_conn
+        let discover_val: Value = probe_conn
             .call(
                 Waist2Method::BodyDiscover,
                 BodyDiscoverParams {
@@ -611,6 +648,8 @@ impl BodyRouter {
                 self.clock.as_ref(),
             )
             .await?;
+        let discover: BodyDiscoverResult = serde_json::from_value(discover_val.clone())
+            .map_err(|e| BodyRpcError::Serialization(e.to_string()))?;
 
         if let Err(ver_err) = check_version(discover.protocol_version, CURRENT_PROTOCOL_VERSION) {
             alive.store(false, Ordering::SeqCst);
@@ -624,6 +663,25 @@ impl BodyRouter {
         sort_capabilities(&mut caps);
         let body_id = discover.body_id.clone();
         *body_slot.lock().expect("body_slot lock") = Some(body_id.clone());
+
+        if let Some(cmds_val) = discover_val.get("_meta").and_then(|m| m.get("commands")) {
+            match serde_json::from_value::<Vec<CommandSpec>>(cmds_val.clone()) {
+                Ok(cmds) => {
+                    self.commands
+                        .lock()
+                        .expect("commands lock")
+                        .register_plugin_commands(&body_id, cmds);
+                }
+                Err(err) => {
+                    self.diagnostics.log(
+                        self.clock.now(),
+                        LogLevel::Warn,
+                        "gateway.commands",
+                        &format!("failed to parse _meta.commands for body '{body_id}': {err}"),
+                    );
+                }
+            }
+        }
 
         let conn = BodyConnection {
             body_id: body_id.clone(),
@@ -1030,7 +1088,7 @@ impl BodyRouter {
         params: Value,
         body_id: Option<&BodyId>,
     ) -> Option<String> {
-        let parsed: ApprovalResolveParams = match serde_json::from_value(params) {
+        let mut parsed: ApprovalResolveParams = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(err) => {
                 return serialize_err_response(
@@ -1054,6 +1112,13 @@ impl BodyRouter {
                 "approval/resolve capability is not wired in this Gateway",
             );
         };
+
+        if let (Some(id_seam), Some(bid)) = (&self.seams.identity, body_id) {
+            let resolved = id_seam.resolve_actor(bid, &parsed.resolver);
+            if resolved != parsed.resolver {
+                parsed.resolver = resolved;
+            }
+        }
 
         let is_attested_oob = body_id.is_some_and(|bid| {
             self.inner
@@ -1152,6 +1217,10 @@ impl BodyRouter {
         };
 
         if removed {
+            self.commands
+                .lock()
+                .expect("commands lock")
+                .unregister_plugin_commands(body_id);
             if let Some(service) = &self.seams.pre_queue_service {
                 service.remove_body_capabilities(body_id);
             }
@@ -1382,6 +1451,62 @@ impl BodyRouter {
         if let SettlementOutcome::SettledFirst(r) = self.settlement.try_settle(action_id, receipt) {
             let _ = self.ingress.try_submit(Input::Receipt(r));
         }
+    }
+
+    /// Dispatches a generic [`CAPABILITY_APPROVAL_PROMPT`] (`"approval.prompt"`) action to the
+    /// adapter owning `prompt_place` if and only if that adapter declared `"approval.prompt"` in
+    /// `body/discover`.
+    ///
+    /// Returns `Ok(false)` cleanly when no body owns `prompt_place` or the owning body does not
+    /// declare `"approval.prompt"` (so callers fall back to CLI/text prompts), and `Ok(true)` when
+    /// the adapter accepted the prompt dispatch.
+    pub async fn dispatch_approval_prompt(
+        &self,
+        prompt_place: &PlaceId,
+        audience: monoagens_protocol::Audience,
+        req: &ApprovalPromptRequest,
+    ) -> Result<bool, BodyRpcError> {
+        let target_conn = {
+            let st = self.inner.lock().expect("router lock");
+            st.place_to_body
+                .get(prompt_place)
+                .and_then(|bid| st.bodies.get(bid))
+                .cloned()
+        };
+        let Some(conn) = target_conn else {
+            return Ok(false);
+        };
+        let declares_prompt = conn
+            .capabilities()
+            .iter()
+            .any(|cap| cap.id.as_str() == CAPABILITY_APPROVAL_PROMPT);
+        if !declares_prompt {
+            return Ok(false);
+        }
+
+        let payload_bytes =
+            serde_json::to_vec(req).map_err(|e| BodyRpcError::Serialization(e.to_string()))?;
+        let timeout_ms = self.action_timeout_ms.max(1);
+        let params = ActionExecuteParams {
+            headers: Waist2Headers::new(format!("approval-prompt-{}", req.action_id)),
+            action_id: ActionId::new(format!("approval-prompt:{}", req.action_id)),
+            capability_id: CapabilityId::new(CAPABILITY_APPROVAL_PROMPT),
+            places: vec![prompt_place.clone()],
+            audience,
+            payload: monoagens_protocol::OpaquePayload::from_bytes(payload_bytes),
+            timeout_ms: Some(timeout_ms),
+            h_act: Some(req.h_act.clone()),
+        };
+
+        let res: ActionExecuteResult = conn
+            .call(
+                Waist2Method::ActionExecute,
+                params,
+                timeout_ms,
+                self.clock.as_ref(),
+            )
+            .await?;
+        Ok(res.accepted)
     }
 
     /// Sends `action/cancel` to the body owning `places.first()` when Core cancels an action.

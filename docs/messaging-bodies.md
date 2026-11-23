@@ -90,6 +90,7 @@ MonoAgens ships two pure-Rust Waist-2 messaging bodies:
 | `chat.mark_read` | — | Native `mark_as_read` read receipts |
 | `chat.edit` | Native `editMessageText` | Native message edit (`edit_message`) |
 | `chat.delete` | Native `deleteMessage` | Native revoke/delete (`revoke_message`) |
+| `approval.prompt` | Native `inline_keyboard` Approve/Deny buttons (`callback_data` bound to `action_id`) -> `approval/resolve` | Prompt message + configurable emoji reaction watcher (`approve_emojis` / `deny_emojis`) -> `approval/resolve` |
 
 ### Building & Pairing
 
@@ -104,12 +105,20 @@ cargo build --release --manifest-path bodies/body-whatsapp/Cargo.toml
 
 # Pair WhatsApp once (QR code in terminal, or --phone 6281234567890 for pairing code)
 ./bodies/body-whatsapp/target/release/body-whatsapp pair \
-  --db "$HOME/.local/share/monoagens/whatsapp/session.db"
+  --db "$HOME/.local/share/monoagens/plugins/body-whatsapp/session.db"
 ```
 
-### Example `monoagens.toml` & Running `monoagens serve`
+### Unified `[plugins.<id>]`, RBAC & Self-Managed Plugin Config (`monoagens.toml`)
 
-Declare both bodies in `[[bodies]]` and static owner/member account bindings in `[[person]]` inside `monoagens.toml` (keep `TELEGRAM_BOT_TOKEN` and LLM `model_api_key` strictly in `secrets.toml` or environment variables — never in `monoagens.toml`):
+MonoAgens keeps `monoagens.toml` lean and internationalized:
+
+- **`[plugins.<id>]`** declares external Waist-2 plugins with `kind = "adapter"` (chat channels like Telegram/WhatsApp) or `kind = "capability"` (tool/skill plugins), optional `enabled`, `dependencies`, and `optional_dependencies`. Legacy `[[bodies]]` entries remain supported as `kind = "adapter"` aliases.
+- **Self-managed plugin config**: Gateway injects `MONOAGENS_PLUGIN_CONFIG=<config_dir>/plugins/<id>.toml`, `MONOAGENS_PLUGIN_STATE_DIR=<data_dir>/plugins/<id>`, `MONOAGENS_BODY_STATE_DIR=<data_dir>/plugins/<id>`, and `MONOAGENS_RBAC_ENABLED=1|0` into each spawned stdio plugin. On first run, `body-telegram` and `body-whatsapp` auto-generate commented `plugins/telegram.toml` (e.g. `default_parse_mode`, `poll_timeout_secs`, `approve_button_label`, `deny_button_label`) and `plugins/whatsapp.toml` (e.g. `auto_typing_on_speak`, `auto_mark_read`, `approve_emojis`, `deny_emojis`).
+- **Generic RBAC narrowing (`[roles]`, `[places]`, `[[person]].roles`)**: `monoagens serve` and `monoagens chat` pass `[roles]` and `[places]` into `ValveConfig::rbac`, strictly narrowing permissions (`Guest < Member < Trusted < Admin < Owner`) and approval modes (`yolo | default | strict`) without ever weakening `cvc5` Absolute Line 1/2 proofs.
+- **Gateway Command Registry (`/help`)**: Gateway indexes built-in commands (`/help`, `/whoami`, `/roles`, `/approve`, `/deny`) alongside plugin-declared `discover._meta.commands`, executing `/help` and built-ins with zero LLM calls and RBAC-filtered visibility per caller.
+- **Generic `approval.prompt` -> `approval/resolve`**: When Valve holds an action (`PendingApproval`), Gateway dispatches `approval.prompt` to the target place's adapter and deterministically verifies the resulting `approval/resolve` against `owner`, `h_act`, `state_epoch`, and TTL.
+
+Keep `TELEGRAM_BOT_TOKEN` and LLM `model_api_key` strictly in `secrets.toml` or environment variables — never in `monoagens.toml`:
 
 ```toml
 version = 1
@@ -118,28 +127,58 @@ version = 1
 name = "Mono"
 seed = 1
 
-[[bodies]]
-id = "body-telegram"
-transport = "stdio"
+[roles]
+fallback = "guest"
+
+[roles.guest]
+base = "guest"
+allow = ["command.help", "identity.whoami"]
+
+[roles.member]
+base = "member"
+allow = ["chat.*"]
+approval = "default"
+
+[roles.trusted]
+base = "trusted"
+allow = ["chat.*", "tool.read"]
+approval = "strict"
+
+[roles.owner]
+base = "owner"
+allow = ["*"]
+
+[places."tg:group:-1001234567890"]
+deny = ["tool.*"]
+
+[plugins.telegram]
+kind = "adapter"
 command = "/path/to/Mono/target/release/body-telegram"
 args = ["--token-env", "TELEGRAM_BOT_TOKEN"]
 
-[[bodies]]
-id = "body-whatsapp"
-transport = "stdio"
+[plugins.whatsapp]
+kind = "adapter"
 command = "/path/to/Mono/bodies/body-whatsapp/target/release/body-whatsapp"
-args = ["--live", "--db", "/home/you/.local/share/monoagens/whatsapp/session.db"]
+args = ["--live"]
+
+# Example capability plugin depending on rbac + an adapter
+# [plugins.web-search]
+# kind = "capability"
+# dependencies = ["rbac"]
+# optional_dependencies = ["telegram", "whatsapp"]
+# command = "/path/to/web-search-plugin"
 
 [[person]]
 actor_id = "owner"
 owner = true
+roles = ["owner"]
 accounts = [
   { body_id = "body-whatsapp", account_id = "wa:user:628123456789@s.whatsapp.net" },
   { body_id = "body-telegram", account_id = "tg:user:123456789" },
 ]
 ```
 
-Start the multi-body Gateway daemon (with `TELEGRAM_BOT_TOKEN` exported or sourced from `.env` and `model_api_key` in `~/.config/monoagens/secrets.toml`):
+Start the multi-plugin Gateway daemon (filter individual plugins with `--plugin <id>` or legacy `--body <id>`):
 
 ```sh
 source "$HOME/.cargo/env"
@@ -153,8 +192,8 @@ source "$HOME/.cargo/env"
 - [ ] **Conformance TCK**: Bridge passes `monoagens-conformance body --target <bridge-bin> --level must` (`B-MUST-01..07`) and ideally `--level should` (`B-SHOULD-01..03`).
 - [ ] **Canonical `PlaceId`s**: DMs and groups use `wa:dm:<jid>`, `wa:group:<jid>`, `tg:dm:<chat_id>`, `tg:group:<chat_id>`.
 - [ ] **Non-empty `audience`**: Every `percept/emit` populates `[sender, self]` for DMs and active members for groups (`-32006` never bypassed).
-- [ ] **`[[person]]` Owner Binding**: Owner accounts across WhatsApp/Telegram map to `actor_id = "owner"` (`owner = true`) in `monoagens.toml`.
-- [ ] **Secret Isolation**: Platform tokens and API keys live only in `secrets.toml` / env vars.
+- [ ] **`[[person]]` Owner Binding & RBAC**: Owner accounts across WhatsApp/Telegram map to `actor_id = "owner"` (`owner = true`, `roles = ["owner"]`) and `[roles]` / `[places]` are configured in `monoagens.toml`.
+- [ ] **Self-Managed Plugin Configs & Secret Isolation**: Platform tokens and API keys live only in `secrets.toml` / env vars, while plugin UX settings live in `plugins/<id>.toml` via `MONOAGENS_PLUGIN_CONFIG`.
 - [ ] **Self-Echo Suppression**: Outbound `pid`s are recorded and ignored on inbound echo webhooks.
-- [ ] **Crash Recovery & Idempotency**: `MONOAGENS_BODY_STATE_DIR` persists `idempotency_key` results and `state/query` answers within `5000 ms` after `SIGKILL`.
+- [ ] **Crash Recovery & Idempotency**: `MONOAGENS_PLUGIN_STATE_DIR` (and `MONOAGENS_BODY_STATE_DIR`) persists `idempotency_key` results and `state/query` answers within `5000 ms` after `SIGKILL`.
 - [ ] **Media > `256 KiB`**: Large attachments transfer via `blob/put` / `blob/get` with SHA-256 verification instead of oversized inline payloads.

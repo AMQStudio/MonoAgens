@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use body_whatsapp::{
-    BlobStager, DEFAULT_BODY_ID, InboundTranslator, LiveWhatsAppTransport, MemoryBlobLookup,
-    WhatsAppBody,
+    BlobStager, DEFAULT_BODY_ID, InboundAction, InboundTranslator, LiveWhatsAppTransport,
+    MemoryBlobLookup, WhatsAppBody, WhatsAppPluginConfig, WhatsAppTransport,
+    resolve_state_dir_from_env,
 };
-use monoagens_body_kit::{PersistentBodyRuntime, load_state_dir_from_env};
+use monoagens_body_kit::PersistentBodyRuntime;
 use monoagens_body_sdk::{
     BlobPutResult, BodyId, InboundFrame, OutboundBuilder, RpcId, Waist2Response,
     parse_inbound_line,
@@ -42,27 +43,14 @@ enum CliCommand {
     },
 }
 
-fn default_db_path() -> PathBuf {
-    let base = env::var_os("XDG_DATA_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME")
-                .filter(|v| !v.is_empty())
-                .map(|h| PathBuf::from(h).join(".local/share"))
-        })
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("monoagens/whatsapp/session.db")
-}
-
-fn parse_cli_args(args: &[String]) -> Result<CliCommand, String> {
+fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliCommand, String> {
     let mut iter = args.iter().peekable();
     let is_pair = iter.peek().is_some_and(|a| a.as_str() == "pair");
     if is_pair {
         iter.next();
     }
 
-    let mut db_path = default_db_path();
+    let mut db_path = config.resolve_db_path();
     let mut phone: Option<String> = None;
     let mut custom_code: Option<String> = None;
     let mut body_id = DEFAULT_BODY_ID.to_owned();
@@ -269,10 +257,12 @@ fn mirror_blob_put_if_present(line: &str, blob_lookup: &MemoryBlobLookup) {
     }
 }
 
-fn run_offline_stdio(body_id: String) -> Result<(), String> {
+fn run_offline_stdio(body_id: String, config: WhatsAppPluginConfig) -> Result<(), String> {
     let blob_lookup = MemoryBlobLookup::default();
-    let mut runtime = PersistentBodyRuntime::new(load_state_dir_from_env());
-    let mut body = WhatsAppBody::offline(BodyId::new(body_id)).with_blob_lookup(blob_lookup.clone());
+    let mut runtime = PersistentBodyRuntime::new(resolve_state_dir_from_env());
+    let mut body = WhatsAppBody::offline(BodyId::new(body_id))
+        .with_config(config)
+        .with_blob_lookup(blob_lookup.clone());
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -368,7 +358,11 @@ impl BlobStager for StdioBlobStager {
     }
 }
 
-async fn run_live_stdio(db_path: PathBuf, body_id: String) -> Result<(), String> {
+async fn run_live_stdio(
+    db_path: PathBuf,
+    body_id: String,
+    config: WhatsAppPluginConfig,
+) -> Result<(), String> {
     ensure_parent_dir(&db_path)?;
     let db_str = db_path
         .to_str()
@@ -407,11 +401,15 @@ async fn run_live_stdio(db_path: PathBuf, body_id: String) -> Result<(), String>
     let transport = LiveWhatsAppTransport::new(bot_handle.client(), rt_handle.clone());
 
     let blob_lookup = MemoryBlobLookup::default();
+    let grace_ms = config.history_grace_secs.saturating_mul(1_000);
+    let auto_mark_read = config.auto_mark_read;
     let body = Arc::new(Mutex::new(
-        WhatsAppBody::new(BodyId::new(body_id), transport).with_blob_lookup(blob_lookup.clone()),
+        WhatsAppBody::new(BodyId::new(body_id), transport)
+            .with_config(config)
+            .with_blob_lookup(blob_lookup.clone()),
     ));
     let runtime = Arc::new(Mutex::new(PersistentBodyRuntime::new(
-        load_state_dir_from_env(),
+        resolve_state_dir_from_env(),
     )));
 
     let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(256);
@@ -473,7 +471,7 @@ async fn run_live_stdio(db_path: PathBuf, body_id: String) -> Result<(), String>
     let ev_outbound = Arc::clone(&outbound_builder);
     let ev_rt = rt_handle.clone();
     let event_worker = tokio::task::spawn_blocking(move || {
-        let mut translator = InboundTranslator::new(boot_ts_ms);
+        let mut translator = InboundTranslator::new(boot_ts_ms).with_grace_ms(grace_ms);
         let mut stager = StdioBlobStager {
             rt: ev_rt,
             outbound: Arc::clone(&ev_outbound),
@@ -493,35 +491,63 @@ async fn run_live_stdio(db_path: PathBuf, body_id: String) -> Result<(), String>
                 Event::Messages(batch) => {
                     for inbound in batch.iter() {
                         seq = seq.saturating_add(1);
-                        let key = format!("wa-percept-{boot_ts_ms}-{seq}");
-                        let percept_opt = {
+                        let key = format!("wa-inbound-{boot_ts_ms}-{seq}");
+                        let action_opt = {
                             let mut body_guard = ev_body.lock().expect("body lock");
-                            let echo_snapshot = body_guard.echo_registry().clone();
-                            let p = translator.translate_inbound(
-                                inbound,
-                                body_guard.transport_mut(),
-                                &echo_snapshot,
-                                &mut stager,
-                                key,
-                            );
-                            if let Some(ref percept) = p {
-                                body_guard.register_place(percept.place.clone());
-                            }
-                            p
-                        };
-                        if let Some(percept) = percept_opt {
-                            let req = {
-                                let mut ob = ev_outbound.lock().expect("outbound lock");
-                                let id = ob.next_rpc_id();
-                                monoagens_body_sdk::Waist2Request::new(
-                                    Some(id),
-                                    monoagens_body_sdk::Waist2Method::PerceptEmit,
-                                    percept,
+                            let action = {
+                                let (transport, echo_reg, pending_approvals) =
+                                    body_guard.inbound_context_mut();
+                                translator.translate_inbound_action(
+                                    inbound,
+                                    transport,
+                                    echo_reg,
+                                    pending_approvals,
+                                    &mut stager,
+                                    key,
                                 )
                             };
-                            if let Ok(wire) = serde_json::to_string(&req) {
-                                let _ = ev_stdout.blocking_send(wire);
+                            if let Some(InboundAction::PerceptEmit(ref percept)) = action {
+                                body_guard.register_place(percept.place.clone());
                             }
+                            if auto_mark_read && action.is_some() {
+                                let _ = body_guard.transport_mut().mark_read(
+                                    &inbound.info.source.chat,
+                                    Some(&inbound.info.source.sender),
+                                    std::slice::from_ref(&inbound.info.id),
+                                );
+                            }
+                            action
+                        };
+                        match action_opt {
+                            Some(InboundAction::PerceptEmit(percept)) => {
+                                let req = {
+                                    let mut ob = ev_outbound.lock().expect("outbound lock");
+                                    let id = ob.next_rpc_id();
+                                    monoagens_body_sdk::Waist2Request::new(
+                                        Some(id),
+                                        monoagens_body_sdk::Waist2Method::PerceptEmit,
+                                        *percept,
+                                    )
+                                };
+                                if let Ok(wire) = serde_json::to_string(&req) {
+                                    let _ = ev_stdout.blocking_send(wire);
+                                }
+                            }
+                            Some(InboundAction::ApprovalResolve(resolve)) => {
+                                let req = {
+                                    let mut ob = ev_outbound.lock().expect("outbound lock");
+                                    let id = ob.next_rpc_id();
+                                    monoagens_body_sdk::Waist2Request::new(
+                                        Some(id),
+                                        monoagens_body_sdk::Waist2Method::ApprovalResolve,
+                                        resolve,
+                                    )
+                                };
+                                if let Ok(wire) = serde_json::to_string(&req) {
+                                    let _ = ev_stdout.blocking_send(wire);
+                                }
+                            }
+                            None => {}
                         }
                     }
                 }
@@ -580,8 +606,15 @@ async fn run_live_stdio(db_path: PathBuf, body_id: String) -> Result<(), String>
 }
 
 fn main() {
+    let config = match WhatsAppPluginConfig::load_or_init_from_env() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("body-whatsapp config error: {err}");
+            std::process::exit(1);
+        }
+    };
     let args: Vec<String> = env::args().skip(1).collect();
-    let cmd = match parse_cli_args(&args) {
+    let cmd = match parse_cli_args(&args, &config) {
         Ok(cmd) => cmd,
         Err(err) => {
             eprintln!("body-whatsapp argument error: {err}");
@@ -612,7 +645,7 @@ fn main() {
         } => {
             let use_offline = force_offline || (!force_live && !db_path.exists());
             if use_offline {
-                if let Err(err) = run_offline_stdio(body_id) {
+                if let Err(err) = run_offline_stdio(body_id, config) {
                     eprintln!("body-whatsapp stdio error: {err}");
                     std::process::exit(1);
                 }
@@ -621,7 +654,7 @@ fn main() {
                     .enable_all()
                     .build()
                     .expect("failed to build tokio runtime");
-                if let Err(err) = rt.block_on(run_live_stdio(db_path, body_id)) {
+                if let Err(err) = rt.block_on(run_live_stdio(db_path, body_id, config)) {
                     eprintln!("body-whatsapp live stdio error: {err}");
                     std::process::exit(1);
                 }

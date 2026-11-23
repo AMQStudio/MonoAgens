@@ -8,10 +8,12 @@
 
 pub mod attachments;
 pub mod clock;
+pub mod commands;
 pub mod config;
 pub mod cues;
 pub mod identity;
 pub mod logging;
+pub mod plugins;
 pub mod prequeue;
 pub mod provider;
 pub mod runtime;
@@ -25,14 +27,15 @@ pub use attachments::{
     ScopedAttachmentBlobReader, sha256_hex,
 };
 pub use clock::{Clock, ClockTimeout, SystemClock, VirtualClock, run_with_clock_timeout};
+pub use commands::{CommandOutcome, CommandRegistry, CommandSpec};
 pub use config::{
     BodyPluginConfig, BodyTransportConfig, CONFIG_FILENAME, CURRENT_CONFIG_VERSION, ConfigError,
     DEFAULT_OPENAI_ENDPOINT, EmbedBackendKind, EmbedConfig, GatewayConfig, IdentityConfig,
     LoadedGatewayEnv, ModelConfig, ModelProviderKind, PersonAccountConfig, PersonMappingConfig,
-    ResolvedPaths, RuntimeConfig, SECRETS_FILENAME, SoulConfig, ValveSectionConfig,
-    default_config_document, extract_cli_config_arg, load_config_file, load_or_init_gateway_env,
-    parse_config_str, resolve_paths, resolve_paths_with, update_config_with_backup,
-    write_default_config,
+    PluginConfig, PluginKind, ResolvedPaths, RuntimeConfig, SECRETS_FILENAME, SoulConfig,
+    ValveSectionConfig, default_config_document, extract_cli_config_arg, load_config_file,
+    load_or_init_gateway_env, parse_config_str, resolve_paths, resolve_paths_with,
+    update_config_with_backup, write_default_config,
 };
 pub use cues::{
     CueRecorder, DEFAULT_PROGRESS_NOTE_MS, DEFAULT_WORKING_CUE_MS, LifecycleCueEvent,
@@ -45,6 +48,11 @@ pub use identity::{
     LINK_NONCE_DOMAIN_PREFIX, OWNER_ESCALATION_GUARD, canonical_kappa, derive_per_actor_id,
 };
 pub use logging::{DiagnosticRecord, DiagnosticSink, LogLevel};
+pub use plugins::{
+    ENV_BODY_STATE_DIR, ENV_PLUGIN_CONFIG, ENV_PLUGIN_STATE_DIR, ENV_RBAC_ENABLED,
+    PluginBootPlan, PluginEnvContext, PluginStartupReport, SkippedPlugin, build_plugin_env,
+    resolve_plugin_boot_order,
+};
 pub use prequeue::{
     EmbedInitError, PreQueueEnrichReport, PreQueueService, ToolRagHit, ToolRagIndex,
     ToolRagQueryResult, build_embedder_from_config, build_embedder_from_config_async,
@@ -69,5 +77,6 @@ pub use secrets::{
     validate_non_secret_file,
 };
 pub use waist2::{
-    ActionSettlementTracker, BodyConnection, BodyRouter, BodyRpcError, SettlementOutcome,
+    ActionSettlementTracker, ApprovalPromptRequest, BodyConnection, BodyRouter, BodyRpcError,
+    CAPABILITY_APPROVAL_PROMPT, SettlementOutcome,
 };

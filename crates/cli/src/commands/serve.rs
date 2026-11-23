@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use monoagens_gateway::BodyPluginConfig;
+use monoagens_gateway::{PluginConfig, PluginEnvContext, PluginKind};
 use monoagens_protocol::ActorId;
 use monoagens_reason::ModelProvider;
 use serde::Serialize;
@@ -15,10 +16,11 @@ use crate::common::{
     write_json_pretty,
 };
 
-/// Per-body startup outcome reported by `monoagens serve`.
+/// Per-plugin startup outcome reported by `monoagens serve`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServeBodyReport {
     pub config_id: String,
+    pub kind: &'static str,
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_id: Option<String>,
@@ -27,7 +29,7 @@ pub struct ServeBodyReport {
     pub error: Option<String>,
 }
 
-/// Startup summary emitted by `monoagens serve` after connecting configured bodies.
+/// Startup summary emitted by `monoagens serve` after connecting configured plugins.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServeStartupReport {
     pub status: &'static str,
@@ -35,26 +37,29 @@ pub struct ServeStartupReport {
     pub data_dir: String,
     pub connected_count: usize,
     pub failed_count: usize,
+    pub skipped_count: usize,
+    pub rbac_enabled: bool,
+    pub indexed_commands: Vec<String>,
     pub bodies: Vec<ServeBodyReport>,
 }
 
-fn select_bodies(
-    configured: &[BodyPluginConfig],
+fn select_plugins(
+    configured: &[PluginConfig],
     filter: &[String],
-) -> Result<Vec<BodyPluginConfig>, String> {
+) -> Result<Vec<PluginConfig>, String> {
     if filter.is_empty() {
         return Ok(configured.to_vec());
     }
     for id in filter {
-        if !configured.iter().any(|b| b.id == *id) {
+        if !configured.iter().any(|p| p.id == *id) {
             return Err(format!(
-                "unknown body id '{id}' (not found in [[bodies]])"
+                "unknown body id '{id}' (not found in [plugins.*] or [[bodies]])"
             ));
         }
     }
     Ok(configured
         .iter()
-        .filter(|b| filter.iter().any(|id| id == &b.id))
+        .filter(|p| filter.iter().any(|id| id == &p.id))
         .cloned()
         .collect())
 }
@@ -127,10 +132,11 @@ pub fn run_serve_with_provider(
         return Ok(1);
     };
 
-    let selected_bodies = select_bodies(&loaded.config.bodies, &args.bodies)?;
-    if selected_bodies.is_empty() && !args.allow_empty {
+    let effective_plugins = loaded.config.effective_plugins();
+    let selected_plugins = select_plugins(&effective_plugins, &args.bodies)?;
+    if selected_plugins.is_empty() && !args.allow_empty {
         return Err(
-            "no [[bodies]] configured (declare [[bodies]] in monoagens.toml or pass --allow-empty)"
+            "no plugins or [[bodies]] configured (declare [plugins.<id>] or [[bodies]] in monoagens.toml or pass --allow-empty)"
                 .to_owned(),
         );
     }
@@ -148,6 +154,14 @@ pub fn run_serve_with_provider(
         .map_err(|e| format!("failed to start tokio runtime: {e}"))?;
 
     let config_path_str = loaded.paths.config_path.display().to_string();
+    let config_dir = loaded
+        .paths
+        .config_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .or_else(|| Some(PathBuf::from(".")));
+    let rbac_enabled = loaded.config.rbac.is_some();
     let exit_after_ms = args.exit_after_ms;
 
     rt.block_on(async move {
@@ -171,52 +185,122 @@ pub fn run_serve_with_provider(
         .await?;
         let data_dir_str = store_dir.display().to_string();
 
+        let env_ctx = PluginEnvContext {
+            config_dir,
+            data_dir: Some(store_dir.clone()),
+            rbac_enabled,
+        };
+
         let handle = runtime.handle();
-        let outcomes = handle.connect_configured_bodies(&selected_bodies).await;
+        let startup = handle
+            .connect_configured_plugins(&selected_plugins, &env_ctx)
+            .await;
 
-        let mut connected_count = 0usize;
-        let mut failed_count = 0usize;
-        let mut body_reports = Vec::with_capacity(outcomes.len());
+        let kind_by_id: BTreeMap<String, PluginKind> = selected_plugins
+            .iter()
+            .map(|p| (p.id.clone(), p.kind))
+            .collect();
+        let kind_str = |id: &str| {
+            kind_by_id
+                .get(id)
+                .copied()
+                .unwrap_or(PluginKind::Adapter)
+                .as_str()
+        };
 
-        for outcome in outcomes {
-            match outcome.result {
-                Ok(body_id) => {
-                    connected_count += 1;
-                    let places = handle
-                        .router()
-                        .owned_places(&body_id)
-                        .into_iter()
-                        .map(|p| p.as_str().to_owned())
-                        .collect();
-                    body_reports.push(ServeBodyReport {
+        let connected_count = startup.connected.len();
+        let failed_count = startup.failed.len();
+        let skipped_count = startup.skipped.len();
+
+        let mut reports_by_id: BTreeMap<String, ServeBodyReport> = BTreeMap::new();
+        for outcome in startup.connected {
+            if let Ok(body_id) = outcome.result {
+                let places = handle
+                    .router()
+                    .owned_places(&body_id)
+                    .into_iter()
+                    .map(|p| p.as_str().to_owned())
+                    .collect();
+                let kind = kind_str(&outcome.config_id);
+                reports_by_id.insert(
+                    outcome.config_id.clone(),
+                    ServeBodyReport {
                         config_id: outcome.config_id,
+                        kind,
                         status: "connected",
                         body_id: Some(body_id.as_str().to_owned()),
                         places,
                         error: None,
-                    });
+                    },
+                );
+            }
+        }
+        for outcome in startup.failed {
+            if let Err(err_val) = outcome.result {
+                let msg = err_val.to_string();
+                let kind = kind_str(&outcome.config_id);
+                if !json_mode {
+                    let _ = writeln!(
+                        err,
+                        "[warn] plugin '{}' ({kind}) failed to connect: {msg}",
+                        outcome.config_id
+                    );
+                    let _ = err.flush();
                 }
-                Err(err_val) => {
-                    failed_count += 1;
-                    let msg = err_val.to_string();
-                    if !json_mode {
-                        let _ = writeln!(
-                            err,
-                            "[warn] body '{}' failed to connect: {msg}",
-                            outcome.config_id
-                        );
-                        let _ = err.flush();
-                    }
-                    body_reports.push(ServeBodyReport {
+                reports_by_id.insert(
+                    outcome.config_id.clone(),
+                    ServeBodyReport {
                         config_id: outcome.config_id,
+                        kind,
                         status: "failed",
                         body_id: None,
                         places: Vec::new(),
                         error: Some(msg),
-                    });
-                }
+                    },
+                );
             }
         }
+        for skip in startup.skipped {
+            let kind = kind_str(&skip.id);
+            if !json_mode {
+                let _ = writeln!(
+                    err,
+                    "[warn] plugin '{}' ({kind}) skipped: {}",
+                    skip.id, skip.reason
+                );
+                let _ = err.flush();
+            }
+            reports_by_id.insert(
+                skip.id.clone(),
+                ServeBodyReport {
+                    config_id: skip.id,
+                    kind,
+                    status: "skipped",
+                    body_id: None,
+                    places: Vec::new(),
+                    error: Some(skip.reason),
+                },
+            );
+        }
+
+        // Preserve declared configuration order in the emitted report.
+        let mut body_reports = Vec::with_capacity(reports_by_id.len());
+        for plugin in &selected_plugins {
+            if let Some(entry) = reports_by_id.remove(&plugin.id) {
+                body_reports.push(entry);
+            }
+        }
+        body_reports.extend(reports_by_id.into_values());
+
+        let indexed_commands: Vec<String> = {
+            let reg = handle.command_registry();
+            let guard = reg.lock().unwrap_or_else(|e| e.into_inner());
+            guard
+                .all_commands()
+                .into_iter()
+                .map(|c| c.name.clone())
+                .collect()
+        };
 
         let report = ServeStartupReport {
             status: "running",
@@ -224,6 +308,9 @@ pub fn run_serve_with_provider(
             data_dir: data_dir_str,
             connected_count,
             failed_count,
+            skipped_count,
+            rbac_enabled,
+            indexed_commands,
             bodies: body_reports,
         };
 
@@ -233,8 +320,12 @@ pub fn run_serve_with_provider(
         } else {
             writeln!(
                 out,
-                "monoagens serve running (connected={}, failed={}, data_dir={})",
-                report.connected_count, report.failed_count, report.data_dir
+                "monoagens serve running (connected={}, failed={}, skipped={}, rbac={}, data_dir={})",
+                report.connected_count,
+                report.failed_count,
+                report.skipped_count,
+                if report.rbac_enabled { "on" } else { "off" },
+                report.data_dir
             )
             .map_err(|e| e.to_string())?;
             for b in &report.bodies {
@@ -242,8 +333,9 @@ pub fn run_serve_with_provider(
                     (Some(bid), _) => {
                         writeln!(
                             out,
-                            "  body={} status={} body_id={} places=[{}]",
+                            "  plugin={} kind={} status={} body_id={} places=[{}]",
                             b.config_id,
+                            b.kind,
                             b.status,
                             bid,
                             b.places.join(",")
@@ -251,14 +343,31 @@ pub fn run_serve_with_provider(
                         .map_err(|e| e.to_string())?;
                     }
                     (None, Some(e)) => {
-                        writeln!(out, "  body={} status={} error={e}", b.config_id, b.status)
-                            .map_err(|e| e.to_string())?;
+                        writeln!(
+                            out,
+                            "  plugin={} kind={} status={} reason={e}",
+                            b.config_id, b.kind, b.status
+                        )
+                        .map_err(|e| e.to_string())?;
                     }
                     (None, None) => {
-                        writeln!(out, "  body={} status={}", b.config_id, b.status)
-                            .map_err(|e| e.to_string())?;
+                        writeln!(
+                            out,
+                            "  plugin={} kind={} status={}",
+                            b.config_id, b.kind, b.status
+                        )
+                        .map_err(|e| e.to_string())?;
                     }
                 }
+            }
+            if !report.indexed_commands.is_empty() {
+                let cmds: Vec<String> = report
+                    .indexed_commands
+                    .iter()
+                    .map(|c| format!("/{c}"))
+                    .collect();
+                writeln!(out, "  commands=[{}]", cmds.join(", "))
+                    .map_err(|e| e.to_string())?;
             }
             let _ = out.flush();
         }

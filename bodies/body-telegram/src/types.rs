@@ -334,6 +334,23 @@ pub struct DeletePayload {
     pub message_id: i64,
 }
 
+/// Payload for `approval.prompt` rendering a generic held action with native inline buttons.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalPromptPayload {
+    pub action_id: String,
+    pub h_act: String,
+    pub state_epoch: u64,
+    pub capability_id: String,
+    #[serde(default)]
+    pub target_places: Vec<String>,
+    pub summary: String,
+    pub expires_at_ms: u64,
+    #[serde(default)]
+    pub approve_label: Option<String>,
+    #[serde(default)]
+    pub deny_label: Option<String>,
+}
+
 /// Resolved media source ready for transport dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaSource {
