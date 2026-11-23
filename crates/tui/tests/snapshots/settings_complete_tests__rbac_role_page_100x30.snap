@@ -1,0 +1,34 @@
+---
+source: crates/tui/tests/settings_complete_tests.rs
+expression: "render_text(100, 30, &state)"
+---
+                                                                                                   │
+                                                                        ✓ Created role 'family'    │
+      ╭ ≡  Settings  (←/→ Tab · ↑/↓ Select · Enter/Space Edit · Esc Back/Close) ─────────────╮     │
+      │  Appearance   Soul & Brain   Model   Valve   RBAC   Providers   Plugins   Runtime    │     │
+      │ ?  Search: type to filter settings…                                                  │     │
+      │──────────────────────────────────────────────────────────────────────────────────────│     │
+   * M│ ▸ Fallback & Roles    │❯ Base tier                    ✦ guest                        │     │
+   Rea│   Actors              │  Approval mode                ✦ inherit                      │     │
+      │   Places & Bases      │  Label                        (none)                         │     │
+   » S│                       │  Context                      (none)                         │     │
+      │                       │  Allow                        [ ] (empty)                    │     │
+      │                       │  Deny                         [ ] (empty)                    │     │
+      │                       │  Settings                     { } (empty)                    │     │
+      │                       │  [ Delete role ]              ▸ Delete                       │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │                                                              │     │
+      │                       │ ──────────────────────────────────────────────────────────── │     │
+      │                       │ i  Tier the role grants; permission bases compare against it │     │
+ ● gpt│                                                                                      │
+──────╰──────────────────────────────────────────────────────────────────────────────────────╯──────
+ > Message Mono or type / for commands…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v paste

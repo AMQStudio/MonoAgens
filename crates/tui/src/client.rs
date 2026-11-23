@@ -92,6 +92,8 @@ pub enum RuntimeEvent {
     Gov(crate::views::GovResponse),
     /// Conversation features: draft preview, trace/explain results, editor, cancel.
     Conv(crate::conv::ConvEvent),
+    /// Result of a settings write, plugin action or pairing line (`crate::settings_runtime`).
+    Settings(crate::settings_runtime::SettingsEvent),
 }
 
 /// Page of the owner's event log.
@@ -173,6 +175,15 @@ pub trait GatewayClient: Send + Sync {
     ) -> Fut<'_, ClientResult<CommandReply>>;
     /// Stops what this client owns (hosting: plugins, socket, gateway; attached: the connection).
     fn shutdown(&self) -> Fut<'_, ()>;
+    /// `secrets.set` for a plugin `[env]` secret (`section = "env"`) or a top-level secret
+    /// (`section = "top"`: `model_api_key`, `model_endpoint`, `embed_api_key`); `None` removes it.
+    /// Write-only: the value is never echoed back.
+    fn secrets_set_named(&self, section: String, name: String, value: Option<String>) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            let _ = (section, name, value);
+            Err(ClientError::server("secrets.set: not supported by this client"))
+        })
+    }
     /// Governance and observability admin methods (`approvals.list`, `people.list`, `links.*`,
     /// `policy.get`, `events.*`, `activity.list`, `lab.*`) and `status`: the same JSON over the
     /// socket or in process. Clients that cannot reach a gateway answer an error.
@@ -657,6 +668,10 @@ impl GatewayClient for InProcessClient {
         Box::pin(async move { Ok(self.owner.usage_get()) })
     }
 
+    fn secrets_set_named(&self, section: String, name: String, value: Option<String>) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.owner.secrets_set_named(&section, &name, value.as_deref()) })
+    }
+
     fn plugins_list(&self) -> Fut<'_, ClientResult<Vec<PluginInfo>>> {
         Box::pin(async move { Ok(self.owner.supervisor().list()) })
     }
@@ -722,6 +737,9 @@ impl GatewayClient for InProcessClient {
         Box::pin(async move {
             if method == "status" {
                 return Ok(self.owner.status());
+            }
+            if method == "capabilities.list" {
+                return Ok(self.owner.capabilities_list());
             }
             monoagens_gateway::governance::governance_call(&self.owner, &method, &params).await
         })
@@ -1053,6 +1071,17 @@ impl GatewayClient for SocketClient {
 
     fn usage_get(&self) -> Fut<'_, ClientResult<Value>> {
         Box::pin(async move { self.call("usage.get", json!({})).await })
+    }
+
+    fn secrets_set_named(&self, section: String, name: String, value: Option<String>) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            let params = if section == "env" {
+                json!({ "env": name, "value": value })
+            } else {
+                json!({ "key": name, "value": value })
+            };
+            self.call("secrets.set", params).await
+        })
     }
 
     fn plugins_list(&self) -> Fut<'_, ClientResult<Vec<PluginInfo>>> {

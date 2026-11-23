@@ -537,12 +537,20 @@ async fn dispatch(owner: &GatewayOwner, method: &str, params: &Value) -> Result<
                 )
                 .await
         }
+        "secrets.set" if params.get("env").is_some() || params.get("key").is_some() => {
+            let (section, name) = match params.get("env") {
+                Some(_) => ("env", param_str(params, "env")?),
+                None => ("top", param_str(params, "key")?),
+            };
+            owner.secrets_set_named(section, name, params.get("value").and_then(Value::as_str))
+        }
         "secrets.set" => {
             owner
                 .secrets_set(param_str(params, "provider")?, param_str(params, "api_key")?)
                 .await
         }
         "usage.get" => Ok(owner.usage_get()),
+        "capabilities.list" => Ok(owner.capabilities_list()),
         other if crate::governance::GOVERNANCE_METHODS.contains(&other) => {
             crate::governance::governance_call(owner, other, params).await
         }

@@ -1,0 +1,34 @@
+---
+source: crates/tui/tests/settings_complete_tests.rs
+expression: "render_text(100, 30, &state)"
+---
+                                                                                                   │
+                                                                                                   │
+                                                                                                   │
+           ╭ MonoAgens Setup 1/4: Provider ─────────────────────────────────────────────╮          │
+           │ Search: ▏                                                                  │          │
+           │                                                                            │          │
+   * MonoAg│❯ OpenAI                      openai                                       ┃│          │
+   Ready to│  Anthropic                   anthropic                                    ┃│          │
+           │  Google Gemini               gemini                                       ┃│          │
+   » Start │  OpenRouter                  openrouter                                   ┃│          │
+           │  Groq                        groq                                         ┃│          │
+           │  Mistral                     mistral                                      ┃│          │
+           │  xAI                         xai                                          ┃│          │
+           │  DeepSeek                    deepseek                                     ┃│          │
+           │  Together AI                 together                                     ┃│          │
+           │  Fireworks AI                fireworks                                    ┃│          │
+           │  Cerebras                    cerebras                                     ┃│          │
+           │  DeepInfra                   deepinfra                                    ┃│          │
+           │  NVIDIA NIM                  nvidia                                       ││          │
+           │  Moonshot AI                 moonshot                                     ││          │
+           │  Z.AI                        zai                                          ││          │
+           │  MiniMax                     minimax                                      ││          │
+           │  Alibaba DashScope           dashscope                                    ││          │
+           │  Hugging Face                huggingface                                  ││          │
+           │                                                                            │          │
+ ● gpt-4o-m│ Enter choose · type to search · Esc skip setup                             │
+───────────╰────────────────────────────────────────────────────────────────────────────╯───────────
+ > Message Mono or type / for commands…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v paste

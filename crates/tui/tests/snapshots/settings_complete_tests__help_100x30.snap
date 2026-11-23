@@ -1,0 +1,34 @@
+---
+source: crates/tui/tests/settings_complete_tests.rs
+expression: "render_text(100, 30, &state)"
+---
+                                                                                                   │
+                                                                                                   │
+                                                                                                   │
+           ╭ Keys: chat (Esc closes) ───────────────────────────────────────────────────╮          │
+           │❯ F1                          Show this key list (also `?` on an empty com… │          │
+           │  Ctrl+K                      Command palette: commands, settings, chats    │          │
+   * MonoAg│  Ctrl+B                      Toggle the sidebar                            │          │
+   Ready to│  Alt+L                       Clear and repaint the terminal                │          │
+           │  Ctrl+Z                      Suspend to the shell                          │          │
+   » Start │  Ctrl+C                      Clear a draft; quit when empty (Ctrl+Q)       │          │
+           │  Enter                       Send the message                              │          │
+           │  Shift+Enter                 Insert a newline                              │          │
+           │  Esc                         Clear the composer                            │          │
+           │  Ctrl+V                      Paste text or an image                        │          │
+           │  /                           Open the command menu (Tab completes, PgUp/P… │          │
+           │  Alt+Up                      Pull the last queued message back             │          │
+           │  Esc esc                     Interrupt the running turn (Esc, Esc)         │          │
+           │  F5                          Retry a failed or interrupted turn (F5, Alt+… │          │
+           │  Ctrl+R                      Config-error banner: retry the boot           │          │
+           │  Ctrl+R                      Search sent-message history (Enter, Esc)      │          │
+           │  Ctrl+G                      Edit the draft in $EDITOR                     │          │
+           │  Ctrl+Up                     Select a message (Ctrl+Up/Down; c q w)        │          │
+           │  Ctrl+O                      Expand the what-happened summary              │          │
+           │  Ctrl+F                      Filter this chat's messages                   │          │
+           │  Up                          Restore a cleared draft (Up when empty)       │          │
+ ● gpt-4o-m│ Rebind keys in /settings > Appearance > Key bindings (keybindings.toml)    │
+───────────╰────────────────────────────────────────────────────────────────────────────╯───────────
+ >  Message Mono or type / for commands…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v paste

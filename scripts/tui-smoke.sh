@@ -3,6 +3,10 @@
 # (never /tmp). No paid model calls: the provider is a tiny local fake HTTP server (python3) whose
 # canned reply is switched by the script; the plugin is the gateway's `fake_plugin` example.
 #
+# Also (tui-settings-complete): the slash menu scrolls to the last command, settings lists show a
+# scrollbar, Esc goes back one level, and a settings edit made through the Ctrl+K palette reaches the
+# daemon's monoagens.toml (with a .bak) when the TUI is attached.
+#
 # Checks: composer, /model picker with search, plugin autostart dot (green), `/log` shows the plugin
 # stderr line, crash -> red -> green after restart, silent-turn notice, a spoken reply, attach to
 # `monoagens serve`, the governance panels (/status, /approvals, /events, /activity, /policy)
@@ -382,6 +386,41 @@ sleep 0.3
 close_overlay "Select model"
 quit_tui
 
+# 6c. scrolling slash menu, settings scrollbar, selector, nested Esc
+start_tui
+wait_for "enter send"
+tmux send-keys -t "$SESSION" "/"
+wait_for "Create a new local chat"
+tmux send-keys -t "$SESSION" Up    # wraps to the last command and scrolls the menu to it
+wait_for_absent "Create a new local chat" 5
+screen | grep -qF "┃" || fail "slash menu scrollbar thumb missing"
+screen | grep -qF "❯" || fail "slash menu selection marker missing"
+echo "ok: slash menu reaches the last command (scrolled, scrollbar drawn)"
+tmux send-keys -t "$SESSION" Escape
+wait_for_absent "❯" 5
+tmux resize-window -t "$SESSION" -x "$COLS" -y 26   # fewer rows than the Model tab has
+sleep 0.5
+tmux send-keys -t "$SESSION" "/settings" Enter
+wait_for "Settings  ("
+tmux send-keys -t "$SESSION" Right Right
+wait_for "Budget & Headers"
+screen | grep -qF "┃" || fail "settings scrollbar thumb missing"
+echo "ok: settings list shows a scrollbar"
+tmux send-keys -t "$SESSION" "output_limit_param"
+sleep 0.3
+tmux send-keys -t "$SESSION" Enter
+wait_for "Type to search"
+tmux send-keys -t "$SESSION" Escape      # 1: closes the selector
+wait_for_absent "Type to search" 5
+screen | grep -qF "Settings  (" || fail "Esc closed the whole overlay instead of the selector"
+tmux send-keys -t "$SESSION" Escape      # 2: clears the search
+sleep 0.3
+screen | grep -qF "Settings  (" || fail "Esc closed the overlay instead of clearing the search"
+tmux send-keys -t "$SESSION" Escape      # 3: closes the overlay
+wait_for_absent "Settings  (" 5
+echo "ok: Esc goes back one level (selector, search, overlay)"
+quit_tui
+
 # 7. attach to `monoagens serve`, then detach: serve (and its plugin) keep running
 SERVE_OUT="$HOME_DIR/serve.out"
 env HOME="$HOME_DIR" XDG_CONFIG_HOME="$HOME_DIR" "$BIN" --config "$HOME_DIR/monoagens.toml" serve \
@@ -439,6 +478,21 @@ wait_for "Cedar rules"
 wait_for "default_cedar_rule_01"
 echo "ok: /policy lists the Cedar rules"
 close_overlay "Cedar rules"
+# 7c. attached TUI: a settings edit found with the Ctrl+K palette goes through config.apply to the
+# daemon (monoagens.toml changes, .bak written)
+tmux send-keys -t "$SESSION" C-k
+wait_for "Command palette"
+tmux send-keys -t "$SESSION" "quiet_hours"
+wait_for "quiet_hours"
+tmux send-keys -t "$SESSION" Enter
+wait_for "Settings  ("
+tmux send-keys -t "$SESSION" Enter
+wait_for "Saved valve.quiet_hours" 15
+grep -q "quiet_hours = true" "$HOME_DIR/monoagens.toml" || fail "daemon config did not change: $(cat "$HOME_DIR/monoagens.toml")"
+[[ -f "$HOME_DIR/monoagens.toml.bak" ]] || fail "no .bak next to the daemon config"
+echo "ok: attached settings edit reached the daemon config (.bak written)"
+tmux send-keys -t "$SESSION" Escape
+wait_for_absent "Settings  (" 5
 quit_tui
 kill -0 "$SERVE_PID" 2>/dev/null || fail "serve died when the TUI detached"
 [[ -S "$HOME_DIR/data/gateway.sock" ]] || fail "admin socket vanished after detach"

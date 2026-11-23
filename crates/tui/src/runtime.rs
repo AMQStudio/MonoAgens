@@ -410,6 +410,9 @@ async fn connect_gateway(
             }
             follower.seen_len = client.events_since(usize::MAX).await.map_or(0, |p| p.total);
             state.chat_disabled_reason = client.chat_unavailable_reason();
+            for w in &state.ux.keymap.warnings {
+                client.log(RunLogLevel::Warn, "keybindings", w);
+            }
             if client.kind() == ClientKind::Attached {
                 let who = read_data_dir_lock_pid(&state.paths.data_dir)
                     .map_or_else(|| "another process".to_owned(), |p| format!("pid {p}"));
@@ -853,6 +856,14 @@ async fn handle_app_action(
                 needs_full_redraw = Redraw::ClearAndDrain;
             }
         }
+        AppAction::Settings(action) => match client.as_ref() {
+            Some(c) => {
+                tokio::spawn(crate::settings_runtime::run_settings_action(action, Arc::clone(c), tx.clone()));
+            }
+            None => {
+                tokio::spawn(crate::settings_runtime::run_settings_action_without_client(action, tx.clone()));
+            }
+        },
         AppAction::ResolveApproval {
             action_id,
             h_act,
@@ -1160,6 +1171,7 @@ pub(crate) fn handle_runtime_event(
                 state.set_toast(text, is_error);
             }
         }
+        RuntimeEvent::Settings(ev) => state.on_settings_event(ev),
         RuntimeEvent::OwnerGone => {
             if client.take().is_some() {
                 state.finish_busy();

@@ -9,15 +9,14 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::config::{IconMode, MessageLayout};
 use crate::effects::TuiEffects;
 use crate::markdown::render_markdown_lines;
 use crate::settings::{
-    PluginDetailState, PluginUiState, SettingValueKind, SettingsTab, SetupWizardState, WizardStep,
-    build_settings_rows,
+    PluginUiState, SettingValueKind, SettingsTab,
 };
 use crate::state::{
     ChatTimelineItem, HitRegions, PendingApprovalCard, TuiAppState, normalize_selection,
@@ -98,10 +97,15 @@ pub fn render_to_buffer(
         modal_rect = Some(mr);
         hit.settings_area = mr;
         render_settings_modal(mr, buf, state, &palette, hit);
+        crate::settings_ui::render_settings_subviews(area, buf, state, &palette, hit);
     } else if let Some(wizard) = &state.wizard {
-        let wr = centered_fixed_rect(72, 20, area);
-        modal_rect = Some(wr);
-        render_setup_wizard(wr, buf, wizard, &palette, hit);
+        modal_rect = Some(area);
+        crate::wizard::render_wizard(area, buf, wizard, &palette, hit);
+    }
+
+    if state.ux.help.is_some() || state.ux.palette.is_some() {
+        modal_rect = Some(area);
+        crate::ui_global::render_ux_overlays(area, buf, state, &palette, hit);
     }
 
     if state.log.open {
@@ -448,10 +452,8 @@ fn render_main_pane(
     // top rule + lines + bottom rule (+ footer hint unless the terminal is short)
     let composer_height = composer_lines + if compact_rows { 2 } else { 3 };
     let fixed_rows = approval_height + busy_height + 1 + attachment_height + composer_height;
-    let autocomplete_height = if state.composer.is_slash_mode() && !state.autocomplete.is_empty() {
-        (state.autocomplete.len() as u16)
-            .min(8)
-            .min(area.height.saturating_sub(fixed_rows + 1))
+    let autocomplete_height = if state.slash_menu_open() {
+        (state.autocomplete_visible_rows() as u16).min(area.height.saturating_sub(fixed_rows + 1))
     } else {
         0
     };
@@ -464,8 +466,8 @@ fn render_main_pane(
             Constraint::Length(busy_height),
             Constraint::Length(1), // status line
             Constraint::Length(attachment_height),
-            Constraint::Length(composer_height),
             Constraint::Length(autocomplete_height),
+            Constraint::Length(composer_height),
         ])
         .split(area);
 
@@ -484,8 +486,8 @@ fn render_main_pane(
     let busy_rect = chunks[2];
     let status_rect = chunks[3];
     let attachment_rect = chunks[4];
-    let composer_rect = chunks[5];
-    let ac_rect = chunks[6];
+    let ac_rect = chunks[5];
+    let composer_rect = chunks[6];
 
     hit.chat_area = feed_rect;
     render_chat_feed(feed_rect, buf, state, palette, hit);
@@ -1276,7 +1278,7 @@ fn render_composer(
 
     if has_footer {
         let hint = if state.is_busy()
-            || (state.composer.is_slash_mode() && !state.autocomplete.is_empty())
+            || state.slash_menu_open()
         {
             " esc to cancel · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v paste"
         } else {
@@ -1299,13 +1301,22 @@ fn render_autocomplete(
     hit: &mut HitRegions,
 ) {
     fill_bg(buf, area, palette.sidebar_bg, palette.fg);
-    let col_left_w = 24usize.min((area.width as usize) / 2);
-    for (idx, item) in state.autocomplete.iter().take(area.height as usize).enumerate() {
-        let y = area.y + idx as u16;
-        let row_rect = Rect::new(area.x, y, area.width, 1);
-        hit.autocomplete_rows.push((row_rect, idx));
+    hit.autocomplete_area = area;
+    let total = state.autocomplete.len();
+    let visible = (area.height as usize).min(total);
+    let offset = scroll_window(state.autocomplete_idx, state.autocomplete_off, visible, total);
+    hit.autocomplete_total = total;
+    hit.autocomplete_visible = visible;
+    hit.autocomplete_offset = offset;
+    let bar_w = u16::from(total > visible);
+    let text_w = area.width.saturating_sub(bar_w);
+    let col_left_w = 24usize.min((text_w as usize) / 2);
+    for (row, item) in state.autocomplete.iter().enumerate().skip(offset).take(visible) {
+        let y = area.y + (row - offset) as u16;
+        let row_rect = Rect::new(area.x, y, text_w, 1);
+        hit.autocomplete_rows.push((row_rect, row));
 
-        let selected = idx == state.autocomplete_idx;
+        let selected = row == state.autocomplete_idx;
         let bg = if selected {
             palette.selection_bg
         } else {
@@ -1314,7 +1325,8 @@ fn render_autocomplete(
         let left_fg = if selected { palette.accent } else { palette.fg };
         fill_bg(buf, row_rect, bg, left_fg);
 
-        let left_text = format!(" {} /{}", item.icon, item.name);
+        let marker = if selected { "❯" } else { " " };
+        let left_text = format!("{marker}{} /{}", item.icon, item.name);
         let padded_left = format!("{left_text:<width$}", width = col_left_w);
         let right_text = match &item.current_value {
             Some(v) => format!("{}  [{v}]", item.description),
@@ -1323,11 +1335,15 @@ fn render_autocomplete(
         let line = Line::from(vec![
             Span::styled(padded_left, Style::default().fg(left_fg).bg(bg)),
             Span::styled(
-                truncate_to_width(&right_text, (area.width as usize).saturating_sub(col_left_w + 2)),
+                truncate_to_width(&right_text, (text_w as usize).saturating_sub(col_left_w + 2)),
                 Style::default().fg(palette.muted).bg(bg),
             ),
         ]);
-        buf.set_line(area.x, y, &line, area.width);
+        buf.set_line(area.x, y, &line, text_w);
+    }
+    if bar_w == 1 {
+        let bar = Rect::new(area.x + area.width - 1, area.y, 1, area.height);
+        render_scrollbar(bar, buf, total, offset, visible, palette);
     }
 }
 
@@ -1360,8 +1376,18 @@ fn render_settings_modal(
     // Tab bar + search bar
     let mut tab_x = inner.x + 1;
     let tab_y = inner.y;
+    // Icons are dropped when the eight tabs do not fit, so every tab stays reachable.
+    let full_w: usize = SettingsTab::ALL
+        .iter()
+        .map(|t| format!(" {} {} ", t.icon(), t.label()).width() + 1)
+        .sum();
+    let with_icons = full_w + 2 <= inner.width as usize;
     for tab in SettingsTab::ALL {
-        let label = format!(" {} {} ", tab.icon(), tab.label());
+        let label = if with_icons {
+            format!(" {} {} ", tab.icon(), tab.label())
+        } else {
+            format!(" {} ", tab.label())
+        };
         let w = label.width() as u16;
         if tab_x + w >= inner.x + inner.width {
             break;
@@ -1417,7 +1443,7 @@ fn render_settings_modal(
     );
 
     if let Some(detail) = &state.settings.plugin_detail {
-        render_plugin_detail(body_area, buf, state, detail, palette, hit);
+        crate::plugin_detail::render_plugin_detail(body_area, buf, state, detail, palette, hit);
     } else {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
@@ -1510,42 +1536,23 @@ fn render_settings_options(
     palette: &ThemePalette,
     hit: &mut HitRegions,
 ) {
-    let rows = build_settings_rows(
-        state.settings.tab,
-        &state.settings.search_query,
-        &state.prefs,
-        &state.gateway_cfg,
-        &state.paths,
-        &state.secrets_summary,
-        &state.settings.valve_toggles,
-        &state.plugins,
-    );
+    let rows = state.visible_settings_rows();
 
-    let desc_h = if !rows.is_empty() && area.height >= 7 {
-        2u16
-    } else {
-        0
-    };
-    let preview_h = if state.settings.tab == SettingsTab::Appearance && area.height >= 12 {
+    let desc_h = if !rows.is_empty() && area.height >= 7 { 2u16 } else { 0 };
+    let preview_h = if state.settings.tab == SettingsTab::Appearance
+        && state.settings.rbac_page.is_none()
+        && area.height >= 12
+    {
         4u16
     } else {
         0
     };
     let list_h = area.height.saturating_sub(preview_h + desc_h) as usize;
+    state.settings.list_rows.set(list_h);
     let selected = state.settings.selected_index.min(rows.len().saturating_sub(1));
-    let scroll = if list_h == 0 {
-        0
-    } else if selected >= state.settings.scroll_offset + list_h {
-        selected.saturating_sub(list_h.saturating_sub(1))
-    } else {
-        state.settings.scroll_offset.min(selected)
-    };
+    let scroll = scroll_window(selected, state.settings.scroll_offset, list_h, rows.len());
     let has_sb = rows.len() > list_h && area.width > 2;
-    let row_w = if has_sb {
-        area.width.saturating_sub(1)
-    } else {
-        area.width
-    };
+    let row_w = if has_sb { area.width.saturating_sub(1) } else { area.width };
 
     for (vis_idx, row) in rows.iter().skip(scroll).take(list_h).enumerate() {
         let abs_idx = scroll + vis_idx;
@@ -1554,53 +1561,29 @@ fn render_settings_options(
         hit.settings_options.push((rect, abs_idx));
 
         let is_sel = abs_idx == selected;
-        let bg = if is_sel {
-            palette.selection_bg
-        } else {
-            palette.modal_bg
-        };
+        let bg = if is_sel { palette.selection_bg } else { palette.modal_bg };
         fill_bg(buf, rect, bg, palette.fg);
 
-        let (val_str, val_style) = match &row.value {
-            SettingValueKind::Bool(true) => (
-                "● ON".to_owned(),
-                Style::default()
-                    .fg(palette.status_green)
-                    .bg(bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            SettingValueKind::Bool(false) => {
-                ("○ off".to_owned(), Style::default().fg(palette.dim).bg(bg))
-            }
-            SettingValueKind::Cycle(s) => (
-                format!("✦ {s}"),
-                Style::default().fg(palette.accent).bg(bg),
-            ),
-            SettingValueKind::Action(s) => (
-                format!("▸ {s}"),
-                Style::default()
-                    .fg(palette.accent)
-                    .bg(bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            SettingValueKind::Text(s)
-            | SettingValueKind::Number(s)
-            | SettingValueKind::ReadOnly(s) => {
-                (s.clone(), Style::default().fg(palette.muted).bg(bg))
-            }
-            SettingValueKind::MaskedSecret { is_set: true } => (
-                "🔒 ●●●● (set)".to_owned(),
-                Style::default().fg(palette.status_green).bg(bg),
-            ),
-            SettingValueKind::MaskedSecret { is_set: false } => (
-                "🔓 (unset)".to_owned(),
-                Style::default().fg(palette.status_yellow).bg(bg),
-            ),
+        let val_style = match &row.value {
+            SettingValueKind::Bool(true) => Style::default()
+                .fg(palette.status_green)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+            SettingValueKind::Bool(false) => Style::default().fg(palette.dim).bg(bg),
+            SettingValueKind::Select(_) => Style::default().fg(palette.accent).bg(bg),
+            SettingValueKind::Action(_) => Style::default()
+                .fg(palette.accent)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+            SettingValueKind::MaskedSecret { is_set: true } => Style::default().fg(palette.status_green).bg(bg),
+            SettingValueKind::MaskedSecret { is_set: false } => Style::default().fg(palette.status_yellow).bg(bg),
+            _ => Style::default().fg(palette.muted).bg(bg),
         };
+        let val_str = crate::settings_ui::value_text(&row.value);
 
         let left_w = ((row_w as usize) / 2).max(18);
         let right_w = (row_w as usize).saturating_sub(left_w + 3);
-        let marker = if is_sel { "▸ " } else { "  " };
+        let marker = if is_sel { "❯ " } else { "  " };
         let label_padded = format!(
             "{marker}{:<width$}",
             truncate_to_width(&row.label, left_w.saturating_sub(3)),
@@ -1614,11 +1597,7 @@ fn render_settings_options(
                 Style::default()
                     .fg(if is_sel { palette.accent } else { palette.fg })
                     .bg(bg)
-                    .add_modifier(if is_sel {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
+                    .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() }),
             ),
             Span::styled(val_trunc, val_style),
         ]);
@@ -1627,16 +1606,7 @@ fn render_settings_options(
 
     if has_sb && list_h > 0 {
         let sb_rect = Rect::new(area.x + area.width - 1, area.y, 1, list_h as u16);
-        render_vertical_scrollbar(
-            buf,
-            sb_rect,
-            rows.len(),
-            list_h,
-            scroll,
-            palette.modal_bg,
-            palette,
-            false,
-        );
+        render_scrollbar(sb_rect, buf, rows.len(), scroll, list_h, palette);
     }
 
     if desc_h > 0
@@ -1651,15 +1621,9 @@ fn render_settings_options(
             Style::default().fg(palette.separator).bg(palette.modal_bg),
         );
         let desc_line = Line::from(vec![
+            Span::styled(" 💡 ", Style::default().fg(palette.accent).bg(palette.modal_bg)),
             Span::styled(
-                " 💡 ",
-                Style::default().fg(palette.accent).bg(palette.modal_bg),
-            ),
-            Span::styled(
-                truncate_to_width(
-                    &sel_row.description,
-                    area.width.saturating_sub(5) as usize,
-                ),
+                truncate_to_width(&sel_row.description, area.width.saturating_sub(5) as usize),
                 Style::default().fg(palette.muted).bg(palette.modal_bg),
             ),
         ]);
@@ -1699,278 +1663,6 @@ fn render_settings_options(
             preview_area.y + 2,
             truncate_to_width(&status_preview, preview_area.width as usize),
             Style::default().bg(palette.status_bg).fg(palette.fg),
-        );
-    }
-}
-
-fn render_plugin_detail(
-    area: Rect,
-    buf: &mut Buffer,
-    state: &TuiAppState,
-    detail: &PluginDetailState,
-    palette: &ThemePalette,
-    hit: &mut HitRegions,
-) {
-    let plugin = state.plugins.iter().find(|p| p.id == detail.plugin_id);
-    let (dot_glyph, dot_color, status_label) = match plugin {
-        Some(p) => {
-            let color = match &p.state {
-                PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
-                PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
-                PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
-            };
-            (p.state.dot_glyph(), color, p.state.label())
-        }
-        None => ("●", palette.dim, "unknown"),
-    };
-    let back_pill = "[ ← Plugins ]";
-    let back_x = area.x + 1;
-    let back_w = (back_pill.width() as u16).min(area.width.saturating_sub(2));
-    hit.settings_back = Some(Rect::new(back_x, area.y, back_w, 1));
-
-    let header = Line::from(vec![
-        Span::styled(
-            back_pill,
-            Style::default()
-                .bg(palette.selection_bg)
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" › {} (", detail.plugin_id),
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(dot_glyph, Style::default().fg(dot_color)),
-        Span::styled(format!(" {status_label})"), Style::default().fg(palette.muted)),
-    ]);
-    buf.set_line(back_x, area.y, &header, area.width.saturating_sub(2));
-
-    let running = plugin.is_some_and(|p| matches!(p.state, PluginUiState::Running | PluginUiState::Starting | PluginUiState::RunningElsewhere));
-    let enabled = plugin.is_some_and(|p| p.enabled);
-    let mut rows: Vec<(String, String)> = vec![
-        (
-            if running {
-                "[ ⏹️ Stop Plugin ]".to_owned()
-            } else {
-                "[ ▶️ Start Plugin ]".to_owned()
-            },
-            "Spawn / stop Waist-2 body".to_owned(),
-        ),
-        (
-            "[ 📱 Pair Device ]".to_owned(),
-            "Run interactive `pair` in TTY".to_owned(),
-        ),
-        (
-            "[ 🚀 Enable on Startup ]".to_owned(),
-            if enabled { "● ON".to_owned() } else { "○ off".to_owned() },
-        ),
-        (
-            "[ 🔑 Manage Env Secrets ]".to_owned(),
-            "Add/update [env] secret in secrets.toml (0600)".to_owned(),
-        ),
-        (
-            format!("[ 🔄 Reload {} ]", detail.toml_path.file_name().and_then(|n| n.to_str()).unwrap_or("plugin.toml")),
-            format!("{} keys", detail.toml_entries.len()),
-        ),
-    ];
-
-    for entry in &detail.toml_entries {
-        rows.push((entry.key_path.clone(), entry.value.display_compact()));
-    }
-    rows.push(("[ ➕ Add TOML Key ]".to_owned(), "Insert key in plugins/<id>.toml".to_owned()));
-
-    let start_y = area.y + 2;
-    let avail_h = area.height.saturating_sub(2) as usize;
-    let total_rows = rows.len();
-    let max_scroll = total_rows.saturating_sub(avail_h);
-    let selected = detail.selected_row.min(total_rows.saturating_sub(1));
-    let scroll = if avail_h == 0 {
-        0
-    } else if selected >= detail.scroll_offset + avail_h {
-        selected.saturating_sub(avail_h - 1)
-    } else if selected < detail.scroll_offset {
-        selected
-    } else {
-        detail.scroll_offset
-    }
-    .min(max_scroll);
-
-    let has_sb = total_rows > avail_h && area.width > 4;
-    let row_w = if has_sb {
-        area.width.saturating_sub(3)
-    } else {
-        area.width.saturating_sub(2)
-    };
-
-    for (vis_idx, (abs_idx, (k, v))) in rows.iter().enumerate().skip(scroll).take(avail_h).enumerate() {
-        let y = start_y + vis_idx as u16;
-        let rect = Rect::new(area.x + 1, y, row_w, 1);
-        hit.settings_options.push((rect, abs_idx));
-        let sel = abs_idx == selected;
-        let bg = if sel {
-            palette.selection_bg
-        } else {
-            palette.modal_bg
-        };
-        fill_bg(buf, rect, bg, palette.fg);
-        let left_w = ((rect.width as usize) / 2).max(20);
-        let line = Line::from(vec![
-            Span::styled(
-                format!(" {:<w$}", truncate_to_width(k, left_w - 2), w = left_w - 1),
-                Style::default()
-                    .fg(if sel { palette.accent } else { palette.fg })
-                    .bg(bg),
-            ),
-            Span::styled(
-                truncate_to_width(v, (rect.width as usize).saturating_sub(left_w + 1)),
-                Style::default().fg(palette.muted).bg(bg),
-            ),
-        ]);
-        buf.set_line(rect.x, rect.y, &line, rect.width);
-    }
-
-    if has_sb && avail_h > 0 {
-        let sb_rect = Rect::new(area.x + area.width - 1, start_y, 1, avail_h as u16);
-        render_vertical_scrollbar(
-            buf,
-            sb_rect,
-            total_rows,
-            avail_h,
-            scroll,
-            palette.modal_bg,
-            palette,
-            false,
-        );
-    }
-}
-
-fn render_setup_wizard(
-    area: Rect,
-    buf: &mut Buffer,
-    wizard: &SetupWizardState,
-    palette: &ThemePalette,
-    hit: &mut HitRegions,
-) {
-    Clear.render(area, buf);
-    fill_bg(buf, area, palette.modal_bg, palette.fg);
-    let title = match wizard.step {
-        WizardStep::Step1Provider => " MonoAgens Setup (Step 1/2: Provider & Key) ",
-        WizardStep::Step2Plugins => " MonoAgens Setup (Step 2/2: Enable Plugins) ",
-    };
-    let block = Block::bordered()
-        .border_style(Style::default().fg(palette.accent))
-        .title(title);
-    let inner = block.inner(area);
-    block.render(area, buf);
-
-    if inner.width < 20 || inner.height < 8 {
-        return;
-    }
-
-    match wizard.step {
-        WizardStep::Step1Provider => {
-            let fields = [
-                ("Endpoint", wizard.endpoint.clone()),
-                ("API Key (0600)", wizard.masked_api_key()),
-                ("Model", wizard.model.clone()),
-                ("[ Next: Plugins → ]", String::new()),
-                ("[ Skip Setup ]", String::new()),
-            ];
-            for (idx, (lbl, val)) in fields.iter().enumerate() {
-                let y = inner.y + 1 + (idx as u16) * 2;
-                if y >= inner.y + inner.height {
-                    break;
-                }
-                let rect = Rect::new(inner.x + 1, y, inner.width.saturating_sub(2), 1);
-                hit.wizard_buttons.push((rect, idx));
-                let sel = wizard.selected_field == idx;
-                let bg = if sel {
-                    palette.selection_bg
-                } else {
-                    palette.modal_bg
-                };
-                fill_bg(buf, rect, bg, palette.fg);
-                let suffix = if sel && wizard.editing { " ▏" } else { "" };
-                let text = if val.is_empty() {
-                    format!(" {lbl}")
-                } else {
-                    format!(" {lbl:<16} {val}{suffix}")
-                };
-                buf.set_string(
-                    rect.x,
-                    rect.y,
-                    truncate_to_width(&text, rect.width as usize),
-                    Style::default()
-                        .fg(if sel { palette.accent } else { palette.fg })
-                        .bg(bg),
-                );
-            }
-        }
-        WizardStep::Step2Plugins => {
-            buf.set_string(
-                inner.x + 1,
-                inner.y + 1,
-                "Space: toggle plugin · Enter: Save & Launch Chat · ←: Back",
-                Style::default().fg(palette.dim),
-            );
-            let max_rows = inner.height.saturating_sub(5) as usize;
-            for (idx, pid) in wizard.plugin_ids.iter().take(max_rows).enumerate() {
-                let y = inner.y + 3 + idx as u16;
-                let rect = Rect::new(inner.x + 1, y, inner.width.saturating_sub(2), 1);
-                hit.wizard_buttons.push((rect, idx));
-                let checked = wizard.plugin_enabled.get(idx).copied().unwrap_or(false);
-                let sel = wizard.plugin_cursor == idx;
-                let bg = if sel {
-                    palette.selection_bg
-                } else {
-                    palette.modal_bg
-                };
-                fill_bg(buf, rect, bg, palette.fg);
-                let box_str = if checked { "[x]" } else { "[ ]" };
-                buf.set_string(
-                    rect.x,
-                    rect.y,
-                    format!(" {box_str} {pid}"),
-                    Style::default()
-                        .fg(if sel { palette.accent } else { palette.fg })
-                        .bg(bg),
-                );
-            }
-            let finish_y = inner.y + inner.height.saturating_sub(2);
-            let back_rect = Rect::new(inner.x + 2, finish_y, 12, 1);
-            let save_rect = Rect::new(inner.x + 16, finish_y, 20, 1);
-            hit.wizard_buttons.push((back_rect, 998));
-            hit.wizard_buttons.push((save_rect, 999));
-            buf.set_string(
-                back_rect.x,
-                back_rect.y,
-                "[ ← Back ]",
-                Style::default().fg(palette.muted),
-            );
-            buf.set_string(
-                save_rect.x,
-                save_rect.y,
-                "[ Save & Finish ]",
-                Style::default()
-                    .bg(palette.accent)
-                    .fg(palette.accent_fg)
-                    .add_modifier(Modifier::BOLD),
-            );
-        }
-    }
-
-    if let Some(err) = &wizard.error {
-        let p = Paragraph::new(err.as_str())
-            .style(Style::default().fg(palette.status_red))
-            .wrap(Wrap { trim: true });
-        p.render(
-            Rect::new(
-                inner.x + 1,
-                inner.y + inner.height.saturating_sub(1),
-                inner.width.saturating_sub(2),
-                1,
-            ),
-            buf,
         );
     }
 }
@@ -2018,14 +1710,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let h = ((u32::from(area.height) * u32::from(percent_y)) / 100)
         .max(10)
         .min(u32::from(area.height)) as u16;
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect::new(x, y, w, h)
-}
-
-fn centered_fixed_rect(max_w: u16, max_h: u16, area: Rect) -> Rect {
-    let w = max_w.min(area.width);
-    let h = max_h.min(area.height);
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     Rect::new(x, y, w, h)

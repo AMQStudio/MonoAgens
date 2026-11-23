@@ -1,15 +1,15 @@
 //! Full interactive TUI application state, slash commands, mouse & keyboard reducers.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use monoagens_gateway::{
-    CommandSpec, EmbedBackendKind, GatewayConfig, ModelProviderKind, PluginConfig, ResolvedPaths,
+    CommandSpec, GatewayConfig, PluginConfig, ResolvedPaths,
+    RunLogLevel,
 };
 use monoagens_protocol::{ActionId, ActorId, Audience, HAct, PlaceId};
 use ratatui::layout::Rect;
-use toml_edit::value;
 use unicode_width::UnicodeWidthChar;
 
 use crate::attachments::{
@@ -18,16 +18,12 @@ use crate::attachments::{
 };
 
 use crate::config::{
-    BUILTIN_PLUGIN_PRESETS, DynamicTomlDoc, LocalChatStore, SidebarMode, StoredChatMessagePreview,
-    TuiPreferences, config_dir_from_path, discover_builtin_binary, find_builtin_preset,
-    install_builtin_plugin, list_secret_keys, parse_dynamic_input, remove_plugin_from_config,
-    remove_secret_env, save_monoagens_toml_field, save_secret_env, save_secret_key,
-    set_plugin_enabled, write_or_update_gateway_config,
+    BUILTIN_PLUGIN_PRESETS, LocalChatStore, SidebarMode, StoredChatMessagePreview, TuiPreferences,
+    config_dir_from_path, discover_builtin_binary, list_secret_keys,
 };
 use crate::settings::{
-    InlineEditState, InlineEditTarget, PluginDetailState, PluginUiEntry, PluginUiState,
-    SecretsUiSummary, SettingValueKind, SettingsModalState, SettingsTab, SetupWizardState,
-    ValveRuleTogglesState, WizardStep, build_settings_rows,
+    PluginUiEntry, PluginUiState, SecretsUiSummary, SettingsModalState, SettingsTab, SetupWizardState,
+    ValveRuleTogglesState, WizardStep,
 };
 use crate::theme::ThemePreset;
 use crate::turn::{NO_REPLY_NOTICE, QueuedMessage, TurnState};
@@ -368,6 +364,15 @@ pub struct HitRegions {
     pub approval_approve: Option<Rect>,
     pub approval_deny: Option<Rect>,
     pub autocomplete_rows: Vec<(Rect, usize)>,
+    pub autocomplete_area: Rect,
+    pub autocomplete_total: usize,
+    pub autocomplete_visible: usize,
+    pub autocomplete_offset: usize,
+    /// Generic list overlay (selector, item editor, palette, help): rows and scroll geometry.
+    pub overlay_area: Rect,
+    pub overlay_rows: Vec<(Rect, usize)>,
+    pub overlay_total: usize,
+    pub overlay_offset: usize,
     pub settings_area: Rect,
     pub log_area: Rect,
     pub log_total: usize,
@@ -398,6 +403,14 @@ impl HitRegions {
         self.approval_approve = None;
         self.approval_deny = None;
         self.autocomplete_rows.clear();
+        self.autocomplete_area = Rect::default();
+        self.autocomplete_total = 0;
+        self.autocomplete_visible = 0;
+        self.autocomplete_offset = 0;
+        self.overlay_area = Rect::default();
+        self.overlay_rows.clear();
+        self.overlay_total = 0;
+        self.overlay_offset = 0;
         self.settings_area = Rect::default();
         self.log_area = Rect::default();
         self.log_total = 0;
@@ -452,6 +465,8 @@ pub enum AppAction {
     Gov(crate::views::GovRequest),
     /// Conversation work for the async runtime (interrupt, editor, trace, preview).
     Conv(crate::conv::ConvAction),
+    /// A settings write or plugin action (see `crate::settings_runtime`).
+    Settings(crate::settings_runtime::SettingsAction),
 }
 
 /// Result of feeding one terminal event to [`TuiAppState::handle_terminal_event`].
@@ -478,6 +493,8 @@ pub struct TuiAppState {
     pub composer: ComposerState,
     pub autocomplete: Vec<SlashCommandItem>,
     pub autocomplete_idx: usize,
+    /// First visible row of the slash menu (kept so the selection stays on screen).
+    pub autocomplete_off: usize,
     pub settings: SettingsModalState,
     pub wizard: Option<SetupWizardState>,
     pub sidebar_scroll: usize,
@@ -519,6 +536,8 @@ pub struct TuiAppState {
     /// Conversation features: interrupt/retry, history search, what-happened, notifications,
     /// draft preview (see `crate::conv`).
     pub conv: crate::conv::ConvState,
+    /// Key map, help overlay and command palette.
+    pub ux: crate::ui_global::UxState,
 }
 
 impl TuiAppState {
@@ -557,6 +576,7 @@ impl TuiAppState {
             timelines.insert(chat.id.clone(), items);
         }
 
+        let keymap = crate::keybindings::KeyMap::load(&crate::keybindings::KeyMap::path_for_config(&paths.config_path));
         let valve_toggles = ValveRuleTogglesState::load_from_config(&paths.config_path);
         let plugins = build_plugin_entries(&gateway_cfg, &paths);
         let settings = SettingsModalState {
@@ -576,6 +596,7 @@ impl TuiAppState {
             composer: ComposerState::default(),
             autocomplete: Vec::new(),
             autocomplete_idx: 0,
+            autocomplete_off: 0,
             settings,
             wizard: None,
             sidebar_scroll: 0,
@@ -606,6 +627,7 @@ impl TuiAppState {
             turn_effects: 0,
             gov: crate::views::GovState::default(),
             conv: crate::conv::ConvState::default(),
+            ux: crate::ui_global::UxState { keymap, ..crate::ui_global::UxState::default() },
         };
         app.filter_autocomplete();
         app
@@ -814,7 +836,7 @@ impl TuiAppState {
                 name: "settings".to_owned(),
                 usage: "/settings".to_owned(),
                 description: "Open 8-tab Settings overlay".to_owned(),
-                current_value: None,
+                current_value: Some(format!("{} tabs", SettingsTab::ALL.len())),
                 icon: "⚙",
                 lab_only: false,
                 from_plugin: None,
@@ -823,7 +845,7 @@ impl TuiAppState {
                 name: "log".to_owned(),
                 usage: "/log".to_owned(),
                 description: "Open the runtime log (levels, sources, search)".to_owned(),
-                current_value: None,
+                current_value: Some(self.log_error_summary()),
                 icon: "§",
                 lab_only: false,
                 from_plugin: None,
@@ -850,10 +872,7 @@ impl TuiAppState {
                 name: "plugins".to_owned(),
                 usage: "/plugins".to_owned(),
                 description: "Open Plugins settings & TOML editor".to_owned(),
-                current_value: Some(format!(
-                    "{} installed",
-                    self.plugins.iter().filter(|p| p.installed).count()
-                )),
+                current_value: Some(self.plugins_live_summary()),
                 icon: "◈",
                 lab_only: false,
                 from_plugin: None,
@@ -1055,7 +1074,6 @@ impl TuiAppState {
             .trim_start()
             .trim_start_matches('/')
             .to_ascii_lowercase();
-        let limit = self.prefs.autocomplete_limit.max(1);
         let mut matches: Vec<SlashCommandItem> = self
             .available_slash_commands()
             .into_iter()
@@ -1065,13 +1083,90 @@ impl TuiAppState {
                     || cmd.name.to_ascii_lowercase().contains(&query)
                     || cmd.description.to_ascii_lowercase().contains(&query)
             })
-            .take(limit)
             .collect();
         if matches.len() <= self.autocomplete_idx {
             self.autocomplete_idx = 0;
         }
         self.autocomplete.clear();
         self.autocomplete.append(&mut matches);
+        self.sync_autocomplete_window();
+    }
+
+    /// The `/` menu is open while the composer starts with `/`, has no space yet and some command
+    /// matches (it closes on Esc, Enter, or when the text stops fitting).
+    #[must_use]
+    pub fn slash_menu_open(&self) -> bool {
+        let t = self.composer.text.trim_start();
+        self.composer.is_slash_mode()
+            && !t.contains(char::is_whitespace)
+            && !self.autocomplete.is_empty()
+    }
+
+    /// Rows the slash menu wants (at most 10, or `autocomplete_limit` when smaller).
+    #[must_use]
+    pub fn autocomplete_visible_rows(&self) -> usize {
+        self.autocomplete
+            .len()
+            .min(self.prefs.autocomplete_limit.clamp(1, 10))
+    }
+
+    fn sync_autocomplete_window(&mut self) {
+        let visible = self.autocomplete_visible_rows();
+        self.autocomplete_off = crate::render::scroll_window(
+            self.autocomplete_idx,
+            self.autocomplete_off,
+            visible,
+            self.autocomplete.len(),
+        );
+    }
+
+    /// Moves the slash selection by `delta` rows (wrapping), keeping it on screen.
+    pub fn autocomplete_move(&mut self, delta: isize) {
+        let n = self.autocomplete.len();
+        if n == 0 {
+            return;
+        }
+        let cur = self.autocomplete_idx as isize;
+        self.autocomplete_idx = (cur + delta).rem_euclid(n as isize) as usize;
+        self.sync_autocomplete_window();
+    }
+
+    /// Moves the slash selection by one page without wrapping.
+    pub fn autocomplete_page(&mut self, down: bool) {
+        let n = self.autocomplete.len();
+        if n == 0 {
+            return;
+        }
+        let page = self.autocomplete_visible_rows().max(1);
+        self.autocomplete_idx = if down {
+            (self.autocomplete_idx + page).min(n - 1)
+        } else {
+            self.autocomplete_idx.saturating_sub(page)
+        };
+        self.sync_autocomplete_window();
+    }
+
+    fn log_error_summary(&self) -> String {
+        let errors = self
+            .log
+            .entries
+            .snapshot()
+            .iter()
+            .filter(|e| e.level == RunLogLevel::Error)
+            .count();
+        match errors {
+            1 => "1 error".to_owned(),
+            n => format!("{n} errors"),
+        }
+    }
+
+    fn plugins_live_summary(&self) -> String {
+        let installed: Vec<_> = self.plugins.iter().filter(|p| p.installed).collect();
+        let running = installed
+            .iter()
+            .filter(|p| p.state == crate::settings::PluginUiState::Running)
+            .count();
+        format!("{running}/{} running", installed.len())
     }
 
     /// Returns `true` when the `workspace` plugin is currently running.
@@ -1278,7 +1373,16 @@ impl TuiAppState {
         let mut actions = Vec::new();
         self.selection = None;
 
-        // Conversation keys (interrupt, history search, editor, retry, message actions)
+        // The help overlay and the command palette own the keyboard while open (before any
+        // conversation shortcut, so Esc closes them instead of interrupting a turn).
+        if (self.ux.help.is_some() || self.ux.palette.is_some())
+            && let Some(handled) = self.global_key(key)
+        {
+            return handled;
+        }
+
+        // Conversation keys (interrupt, history search, editor, retry, message actions). Not
+        // active while a settings overlay, selector, wizard or log/catalog/governance panel is open.
         if let Some(handled) = self.conv_key(key) {
             return handled;
         }
@@ -1291,14 +1395,10 @@ impl TuiAppState {
             return actions;
         }
 
-        // Global Ctrl+Z suspend and Alt+L display reset
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('z') {
-            return vec![AppAction::Suspend];
-        }
-        if key.modifiers.contains(KeyModifiers::ALT)
-            && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
-        {
-            return vec![AppAction::ResetDisplay];
+        // Help overlay, command palette and the rebindable global keys (suspend, display reset,
+        // sidebar) come from the action table.
+        if let Some(actions) = self.global_key(key) {
+            return actions;
         }
 
         // The `/log` overlay owns the keyboard while open
@@ -1320,7 +1420,7 @@ impl TuiAppState {
             return self.handle_wizard_key(key);
         }
 
-        // Config-error state: Ctrl+R retries the gateway boot
+        // Config-error state: Ctrl+R retries the gateway boot (history search is off in this state)
         if self.config_error.is_some()
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('r')
@@ -1338,15 +1438,9 @@ impl TuiAppState {
             return actions;
         }
 
-        // Global Ctrl+B sidebar toggle
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('b') {
-            self.toggle_sidebar(120);
-            return actions;
-        }
-
         // Settings overlay intercepts input while open
         if self.settings.open {
-            return self.handle_settings_key(key);
+            return self.settings_key(key);
         }
 
         // Composer Ctrl+V clipboard paste (image or text)
@@ -1403,7 +1497,7 @@ impl TuiAppState {
         }
 
         // Slash autocomplete navigation
-        if self.composer.is_slash_mode() && !self.autocomplete.is_empty() {
+        if self.slash_menu_open() {
             match key.code {
                 KeyCode::Tab => {
                     if let Some(item) = self.autocomplete.get(self.autocomplete_idx) {
@@ -1414,16 +1508,30 @@ impl TuiAppState {
                     return actions;
                 }
                 KeyCode::Up => {
-                    if self.autocomplete_idx > 0 {
-                        self.autocomplete_idx -= 1;
-                    } else {
-                        self.autocomplete_idx = self.autocomplete.len() - 1;
-                    }
+                    self.autocomplete_move(-1);
                     return actions;
                 }
                 KeyCode::Down => {
-                    self.autocomplete_idx = (self.autocomplete_idx + 1) % self.autocomplete.len();
+                    self.autocomplete_move(1);
                     return actions;
+                }
+                KeyCode::PageUp => {
+                    self.autocomplete_page(false);
+                    return actions;
+                }
+                KeyCode::PageDown => {
+                    self.autocomplete_page(true);
+                    return actions;
+                }
+                KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    // Enter runs the highlighted command (typed prefixes are completed first).
+                    if let Some(item) = self.autocomplete.get(self.autocomplete_idx).cloned() {
+                        let typed = self.composer.text.trim().trim_start_matches('/').to_owned();
+                        if !self.autocomplete.iter().any(|c| c.name == typed) {
+                            self.composer.text = format!("/{}", item.name);
+                            self.composer.cursor = self.composer.text.len();
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -2136,20 +2244,29 @@ impl TuiAppState {
             return actions;
         }
 
+        if let Some(actions) = self.ux_mouse(mouse, hit) {
+            return actions;
+        }
+
+        // The slash menu takes the wheel while the pointer is over it.
+        if self.slash_menu_open()
+            && rect_contains(hit.autocomplete_area, x, y)
+            && matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+        {
+            let delta = if matches!(mouse.kind, MouseEventKind::ScrollUp) { -1 } else { 1 };
+            let n = self.autocomplete.len() as isize;
+            // The wheel scrolls without wrapping.
+            let idx = (self.autocomplete_idx as isize + delta).clamp(0, n - 1);
+            self.autocomplete_idx = idx as usize;
+            self.sync_autocomplete_window();
+            return actions;
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.selection = None;
                 if self.settings.open {
-                    if self.settings.plugin_detail.is_some() {
-                        if let Some(detail) = &mut self.settings.plugin_detail {
-                            detail.selected_row = detail.selected_row.saturating_sub(1);
-                            detail.scroll_offset = detail.scroll_offset.saturating_sub(1);
-                        }
-                    } else {
-                        self.settings.scroll_offset = self.settings.scroll_offset.saturating_sub(1);
-                        self.settings.selected_index =
-                            self.settings.selected_index.saturating_sub(1);
-                    }
+                    self.settings_wheel(-1);
                 } else if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
                     self.sidebar_scroll = self.sidebar_scroll.saturating_sub(2);
                 } else if rect_contains(hit.chat_area, x, y) || !rect_contains(hit.sidebar_area, x, y) {
@@ -2160,18 +2277,7 @@ impl TuiAppState {
             MouseEventKind::ScrollDown => {
                 self.selection = None;
                 if self.settings.open {
-                    if let Some(detail) = &mut self.settings.plugin_detail {
-                        let max_idx = detail.total_rows().saturating_sub(1);
-                        detail.selected_row = (detail.selected_row + 1).min(max_idx);
-                        detail.scroll_offset = (detail.scroll_offset + 1).min(max_idx);
-                    } else {
-                        let rows = self.current_settings_rows();
-                        if !rows.is_empty() {
-                            self.settings.selected_index =
-                                (self.settings.selected_index + 1).min(rows.len() - 1);
-                            self.settings.scroll_offset = self.settings.scroll_offset.saturating_add(1);
-                        }
-                    }
+                    self.settings_wheel(1);
                 } else if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
                     self.sidebar_scroll = (self.sidebar_scroll + 2).min(hit.sidebar_max_scroll);
                 } else if rect_contains(hit.chat_area, x, y) || !rect_contains(hit.sidebar_area, x, y) {
@@ -2195,6 +2301,9 @@ impl TuiAppState {
 
                 if self.settings.open {
                     self.selection = None;
+                    if self.settings.has_subview() && self.settings.plugin_detail.is_none() {
+                        return actions; // a dialog or editor owns the pointer
+                    }
                     if self.settings.plugin_detail.is_some()
                         && let Some(back_rect) = hit.settings_back
                         && rect_contains(back_rect, x, y)
@@ -2205,13 +2314,7 @@ impl TuiAppState {
                     }
                     for (rect, tab) in &hit.settings_tabs {
                         if rect_contains(*rect, x, y) {
-                            self.settings.tab = *tab;
-                            self.settings.section_index = 0;
-                            self.settings.selected_index = 0;
-                            self.settings.scroll_offset = 0;
-                            self.settings.plugin_detail = None;
-                            self.settings.editing = None;
-                            return actions;
+                            return self.switch_settings_tab(*tab);
                         }
                     }
                     for (rect, sec_idx) in &hit.settings_sections {
@@ -2410,20 +2513,7 @@ impl TuiAppState {
         self.auto_scroll = self.chat_scroll >= max_scroll;
     }
 
-    fn current_settings_rows(&self) -> Vec<crate::settings::SettingRow> {
-        build_settings_rows(
-            self.settings.tab,
-            &self.settings.search_query,
-            &self.prefs,
-            &self.gateway_cfg,
-            &self.paths,
-            &self.secrets_summary,
-            &self.settings.valve_toggles,
-            &self.plugins,
-        )
-    }
-
-    fn jump_to_section(&mut self, sec_idx: usize) {
+    pub(crate) fn jump_to_section(&mut self, sec_idx: usize) {
         let sections = self.settings.tab.sections();
         let Some(target_sec) = sections.get(sec_idx) else {
             return;
@@ -2435,1012 +2525,13 @@ impl TuiAppState {
         }
     }
 
-    fn open_plugin_detail(&mut self, plugin_id: &str) {
-        let cfg_dir = config_dir_from_path(&self.paths.config_path);
-        let toml_path = cfg_dir.join("plugins").join(format!("{plugin_id}.toml"));
-        let mut detail = PluginDetailState {
-            plugin_id: plugin_id.to_owned(),
-            selected_row: 0,
-            scroll_offset: 0,
-            toml_path,
-            toml_doc: None,
-            toml_entries: Vec::new(),
-            show_env_manager: false,
-        };
-        detail.reload_toml();
-        self.settings.plugin_detail = Some(detail);
-    }
-
-    fn handle_wizard_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
-        let Some(w) = &mut self.wizard else {
-            return Vec::new();
-        };
-        match w.step {
-            WizardStep::Step1Provider => {
-                if w.editing {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Enter => {
-                            w.editing = false;
-                        }
-                        KeyCode::Backspace => {
-                            match w.selected_field {
-                                0 => {
-                                    w.endpoint.pop();
-                                }
-                                1 => {
-                                    w.api_key.pop();
-                                }
-                                2 => {
-                                    w.model.pop();
-                                }
-                                _ => {}
-                            }
-                        }
-                        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            match w.selected_field {
-                                0 => w.endpoint.push(ch),
-                                1 => w.api_key.push(ch),
-                                2 => w.model.push(ch),
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                    return Vec::new();
-                }
-
-                match key.code {
-                    KeyCode::Up => {
-                        w.selected_field = w.selected_field.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Tab => {
-                        w.selected_field = (w.selected_field + 1) % 5;
-                    }
-                    KeyCode::Enter => {
-                        if w.selected_field <= 2 {
-                            w.editing = true;
-                        } else if w.selected_field == 3 {
-                            w.step = WizardStep::Step2Plugins;
-                        } else {
-                            self.wizard = None;
-                            return vec![AppAction::CompleteSetupWizard];
-                        }
-                    }
-                    KeyCode::Esc => {
-                        self.wizard = None;
-                        return vec![AppAction::CompleteSetupWizard];
-                    }
-                    _ => {}
-                }
-            }
-            WizardStep::Step2Plugins => match key.code {
-                KeyCode::Up => {
-                    w.plugin_cursor = w.plugin_cursor.saturating_sub(1);
-                }
-                KeyCode::Down => {
-                    if !w.plugin_ids.is_empty() {
-                        w.plugin_cursor = (w.plugin_cursor + 1).min(w.plugin_ids.len() - 1);
-                    }
-                }
-                KeyCode::Char(' ') => {
-                    if let Some(slot) = w.plugin_enabled.get_mut(w.plugin_cursor) {
-                        *slot = !*slot;
-                    }
-                }
-                KeyCode::Left | KeyCode::BackTab => {
-                    w.step = WizardStep::Step1Provider;
-                }
-                KeyCode::Enter => {
-                    return self.finish_wizard();
-                }
-                KeyCode::Esc => {
-                    self.wizard = None;
-                    return vec![AppAction::CompleteSetupWizard];
-                }
-                _ => {}
-            },
-        }
-        Vec::new()
-    }
-
-    fn activate_wizard_button(&mut self, btn_idx: usize) -> Vec<AppAction> {
-        let Some(w) = &mut self.wizard else {
-            return Vec::new();
-        };
-        match w.step {
-            WizardStep::Step1Provider => {
-                if btn_idx <= 2 {
-                    w.selected_field = btn_idx;
-                    w.editing = true;
-                    Vec::new()
-                } else if btn_idx == 3 {
-                    w.step = WizardStep::Step2Plugins;
-                    Vec::new()
-                } else {
-                    self.wizard = None;
-                    vec![AppAction::CompleteSetupWizard]
-                }
-            }
-            WizardStep::Step2Plugins => {
-                if btn_idx == 999 {
-                    self.finish_wizard()
-                } else if btn_idx == 998 {
-                    w.step = WizardStep::Step1Provider;
-                    Vec::new()
-                } else if let Some(slot) = w.plugin_enabled.get_mut(btn_idx) {
-                    w.plugin_cursor = btn_idx;
-                    *slot = !*slot;
-                    Vec::new()
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-    }
-
-    fn finish_wizard(&mut self) -> Vec<AppAction> {
-        let Some(mut w) = self.wizard.take() else {
-            return Vec::new();
-        };
-        if !w.endpoint.trim().is_empty()
-            && let Err(e) = save_secret_key(&self.paths.secrets_path, "model_endpoint", &w.endpoint)
-        {
-            w.error = Some(e);
-            self.wizard = Some(w);
-            return Vec::new();
-        }
-        if !w.api_key.trim().is_empty() {
-            if let Err(e) = save_secret_key(&self.paths.secrets_path, "model_api_key", &w.api_key)
-            {
-                w.error = Some(e);
-                self.wizard = Some(w);
-                return Vec::new();
-            }
-            self.secrets_summary.model_api_key_set = true;
-        }
-        // Clear plaintext API key immediately from wizard buffer
-        w.api_key.clear();
-        if !w.endpoint.trim().is_empty() {
-            self.secrets_summary.model_endpoint = Some(w.endpoint.trim().to_owned());
-        }
-        if !w.model.trim().is_empty() {
-            self.gateway_cfg.model.model = w.model.trim().to_owned();
-            self.model_name = self.gateway_cfg.model.model.clone();
-        }
-        let _ = write_or_update_gateway_config(
-            &self.paths.config_path,
-            &self.paths.secrets_path,
-            &self.gateway_cfg,
-        );
-        for (idx, enabled) in w.plugin_enabled.iter().enumerate() {
-            if *enabled
-                && let Some(pid) = w.plugin_ids.get(idx)
-                && let Ok(spec) =
-                    install_builtin_plugin(&self.paths.config_path, &self.paths.secrets_path, pid)
-            {
-                self.gateway_cfg.plugins.push(spec);
-            }
-        }
-        self.refresh_plugins_from_config();
-        self.refresh_secrets_summary();
-        self.set_toast("Setup saved to secrets.toml (0600) & monoagens.toml", false);
-        vec![AppAction::CompleteSetupWizard]
-    }
-
-    fn handle_settings_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
-        // Inline edit input inside /settings
-        if self.settings.editing.is_some() {
-            return self.handle_settings_inline_edit_key(key);
-        }
-
-        // Level 2 Plugin Detail (`Plugins › <id>`)
-        if self.settings.plugin_detail.is_some() {
-            return self.handle_plugin_detail_key(key);
-        }
-
-        let rows = self.current_settings_rows();
-        match key.code {
-            KeyCode::Esc => {
-                if !self.settings.search_query.is_empty() {
-                    self.settings.search_query.clear();
-                    self.settings.selected_index = 0;
-                } else {
-                    self.settings.close();
-                }
-            }
-            KeyCode::Left => {
-                self.settings.tab = self.settings.tab.prev();
-                self.settings.section_index = 0;
-                self.settings.selected_index = 0;
-                self.settings.scroll_offset = 0;
-            }
-            KeyCode::Right => {
-                self.settings.tab = self.settings.tab.next();
-                self.settings.section_index = 0;
-                self.settings.selected_index = 0;
-                self.settings.scroll_offset = 0;
-            }
-            KeyCode::Tab => {
-                let sec_len = self.settings.tab.sections().len();
-                if sec_len > 0 {
-                    self.settings.section_index = (self.settings.section_index + 1) % sec_len;
-                    self.jump_to_section(self.settings.section_index);
-                }
-            }
-            KeyCode::Up => {
-                if !rows.is_empty() {
-                    self.settings.selected_index = self.settings.selected_index.saturating_sub(1);
-                }
-            }
-            KeyCode::Down => {
-                if !rows.is_empty() {
-                    self.settings.selected_index =
-                        (self.settings.selected_index + 1).min(rows.len() - 1);
-                }
-            }
-            KeyCode::Backspace => {
-                self.settings.search_query.pop();
-                self.settings.selected_index = 0;
-            }
-            KeyCode::Char(' ') => {
-                if self.settings.tab == SettingsTab::Plugins
-                    && let Some(row) = rows.get(self.settings.selected_index)
-                    && let Some(pid) = row.id.strip_prefix("plugin.")
-                {
-                    return self.toggle_plugin_running(pid);
-                }
-                return self.activate_settings_row(self.settings.selected_index);
-            }
-            KeyCode::Char('i') if self.settings.tab == SettingsTab::Plugins && self.settings.search_query.is_empty() => {
-                if let Some(row) = rows.get(self.settings.selected_index)
-                    && let Some(pid) = row.id.strip_prefix("plugin.")
-                {
-                    self.install_plugin_by_id(pid);
-                }
-            }
-            KeyCode::Char('d')
-                if matches!(self.settings.tab, SettingsTab::Plugins | SettingsTab::Providers)
-                    && self.settings.search_query.is_empty() =>
-            {
-                if let Some(row) = rows.get(self.settings.selected_index) {
-                    if let Some(pid) = row.id.strip_prefix("plugin.") {
-                        self.remove_plugin_by_id(pid);
-                    } else if let Some(env_k) = row.id.strip_prefix("secrets.env.") {
-                        if let Err(e) = remove_secret_env(&self.paths.secrets_path, env_k) {
-                            self.set_toast(e, true);
-                        } else {
-                            self.refresh_secrets_summary();
-                            self.set_toast(format!("Removed [env] secret '{env_k}'"), false);
-                        }
-                    }
-                }
-            }
-            KeyCode::Enter => {
-                return self.activate_settings_row(self.settings.selected_index);
-            }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.settings.search_query.push(ch);
-                self.settings.selected_index = 0;
-                self.settings.scroll_offset = 0;
-            }
-            _ => {}
-        }
-        Vec::new()
-    }
-
-    fn handle_plugin_detail_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
-        let Some(detail) = &mut self.settings.plugin_detail else {
-            return Vec::new();
-        };
-        let total = detail.total_rows();
-        match key.code {
-            KeyCode::Esc => {
-                self.settings.plugin_detail = None;
-            }
-            KeyCode::Up => {
-                detail.selected_row = detail.selected_row.saturating_sub(1);
-                if detail.selected_row < detail.scroll_offset {
-                    detail.scroll_offset = detail.selected_row;
-                }
-            }
-            KeyCode::Down => {
-                if total > 0 {
-                    detail.selected_row = (detail.selected_row + 1).min(total - 1);
-                }
-            }
-            KeyCode::PageUp => {
-                detail.selected_row = detail.selected_row.saturating_sub(5);
-                detail.scroll_offset = detail.scroll_offset.saturating_sub(5);
-            }
-            KeyCode::PageDown => {
-                if total > 0 {
-                    detail.selected_row = (detail.selected_row + 5).min(total - 1);
-                }
-            }
-            KeyCode::Char(' ') | KeyCode::Enter => {
-                let row = detail.selected_row;
-                return self.activate_plugin_detail_row(row);
-            }
-            _ => {}
-        }
-        Vec::new()
-    }
-
-    fn activate_plugin_detail_row(&mut self, row: usize) -> Vec<AppAction> {
-        let Some(detail) = self.settings.plugin_detail.clone() else {
-            return Vec::new();
-        };
-        let pid = detail.plugin_id.clone();
-        match row {
-            0 => self.toggle_plugin_running(&pid),
-            1 => vec![AppAction::PairPlugin(pid)],
-            2 => {
-                let currently_enabled = self
-                    .plugins
-                    .iter()
-                    .find(|p| p.id == pid)
-                    .is_some_and(|p| p.enabled);
-                let next_enabled = !currently_enabled;
-                if let Err(e) = set_plugin_enabled(
-                    &self.paths.config_path,
-                    &self.paths.secrets_path,
-                    &pid,
-                    next_enabled,
-                ) {
-                    self.set_toast(e, true);
-                } else {
-                    if let Some(p) = self.gateway_cfg.plugins.iter_mut().find(|p| p.id == pid) {
-                        p.enabled = next_enabled;
-                    }
-                    self.refresh_plugins_from_config();
-                    self.set_toast(
-                        format!(
-                            "{} '{pid}' on startup",
-                            if next_enabled { "Enabled" } else { "Disabled" }
-                        ),
-                        false,
-                    );
-                }
-                Vec::new()
-            }
-            3 => {
-                // Manage Env Secrets -> start inline add/update [env] secret prompt
-                self.settings.editing = Some(InlineEditState {
-                    target: InlineEditTarget::NewEnvKeyName,
-                    prompt: format!("Enter [env] secret key name for {pid} (e.g. TELEGRAM_BOT_TOKEN)"),
-                    buffer: String::new(),
-                    masked: false,
-                });
-                Vec::new()
-            }
-            4 => {
-                if let Some(d) = &mut self.settings.plugin_detail {
-                    d.reload_toml();
-                }
-                self.set_toast(format!("Reloaded {}", detail.toml_path.display()), false);
-                Vec::new()
-            }
-            idx => {
-                let toml_idx = idx - PluginDetailState::ACTION_COUNT;
-                if let Some(entry) = detail.toml_entries.get(toml_idx) {
-                    match &entry.value {
-                        crate::config::DynamicTomlValue::Bool(b) => {
-                            if let Some(d) = &mut self.settings.plugin_detail
-                                && let Some(doc) = &mut d.toml_doc
-                            {
-                                let _ = doc.set_entry(
-                                    &entry.key_path,
-                                    crate::config::DynamicTomlValue::Bool(!*b),
-                                );
-                                if let Err(e) = doc.save() {
-                                    self.set_toast(e, true);
-                                } else {
-                                    d.reload_toml();
-                                    self.set_toast(format!("Saved {}", entry.key_path), false);
-                                }
-                            }
-                        }
-                        other => {
-                            self.settings.editing = Some(InlineEditState {
-                                target: InlineEditTarget::PluginTomlValue {
-                                    plugin_id: pid,
-                                    key_path: entry.key_path.clone(),
-                                },
-                                prompt: format!("Edit {} ({})", entry.key_path, other.display_compact()),
-                                buffer: other.display_compact(),
-                                masked: false,
-                            });
-                        }
-                    }
-                } else {
-                    // Add new TOML key
-                    self.settings.editing = Some(InlineEditState {
-                        target: InlineEditTarget::PluginTomlNewKeyName { plugin_id: pid },
-                        prompt: "Enter new TOML key path (e.g. session.auto_reconnect)".to_owned(),
-                        buffer: String::new(),
-                        masked: false,
-                    });
-                }
-                Vec::new()
-            }
-        }
-    }
-
-    fn handle_settings_inline_edit_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
-        let Some(edit) = &mut self.settings.editing else {
-            return Vec::new();
-        };
-        match key.code {
-            KeyCode::Esc => {
-                self.settings.editing = None;
-            }
-            KeyCode::Backspace => {
-                edit.buffer.pop();
-            }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                edit.buffer.push(ch);
-            }
-            KeyCode::Enter => {
-                let finished = self.settings.editing.take().expect("checked");
-                return self.commit_inline_edit(finished);
-            }
-            _ => {}
-        }
-        Vec::new()
-    }
-
-    fn commit_inline_edit(&mut self, mut edit: InlineEditState) -> Vec<AppAction> {
-        let val_str = edit.buffer.trim().to_owned();
-        match edit.target {
-            InlineEditTarget::NewEnvKeyName => {
-                if !val_str.is_empty() {
-                    self.settings.editing = Some(InlineEditState {
-                        target: InlineEditTarget::NewEnvSecretValue {
-                            env_key: val_str.clone(),
-                        },
-                        prompt: format!("Enter secret value for [env].{val_str} (masked)"),
-                        buffer: String::new(),
-                        masked: true,
-                    });
-                }
-            }
-            InlineEditTarget::NewEnvSecretValue { env_key } => {
-                if let Err(e) = save_secret_env(&self.paths.secrets_path, &env_key, &val_str) {
-                    self.set_toast(e, true);
-                } else {
-                    self.refresh_secrets_summary();
-                    self.set_toast(format!("Saved [env].{env_key} to secrets.toml (0600)"), false);
-                }
-                edit.buffer.clear();
-            }
-            InlineEditTarget::PluginTomlValue {
-                plugin_id: _,
-                key_path,
-            } => {
-                if let Some(detail) = &mut self.settings.plugin_detail {
-                    if detail.toml_doc.is_none() {
-                        detail.toml_doc = DynamicTomlDoc::load_or_init(&detail.toml_path).ok();
-                    }
-                    let hint = detail
-                        .toml_entries
-                        .iter()
-                        .find(|e| e.key_path == key_path)
-                        .map(|e| &e.value);
-                    let parsed = parse_dynamic_input(&val_str, hint);
-                    if let Some(doc) = &mut detail.toml_doc {
-                        if let Err(e) = doc.set_entry(&key_path, parsed).and_then(|()| doc.save()) {
-                            self.set_toast(e, true);
-                        } else {
-                            detail.reload_toml();
-                            self.set_toast(format!("Saved {key_path}"), false);
-                        }
-                    }
-                }
-            }
-            InlineEditTarget::PluginTomlNewKeyName { plugin_id } => {
-                if !val_str.is_empty() {
-                    self.settings.editing = Some(InlineEditState {
-                        target: InlineEditTarget::PluginTomlNewKeyValue {
-                            plugin_id,
-                            key_path: val_str.clone(),
-                        },
-                        prompt: format!("Enter value for {val_str} (bool/int/float/string/[a,b])"),
-                        buffer: String::new(),
-                        masked: false,
-                    });
-                }
-            }
-            InlineEditTarget::PluginTomlNewKeyValue {
-                plugin_id: _,
-                key_path,
-            } => {
-                if let Some(detail) = &mut self.settings.plugin_detail {
-                    if detail.toml_doc.is_none() {
-                        detail.toml_doc = DynamicTomlDoc::load_or_init(&detail.toml_path).ok();
-                    }
-                    let parsed = parse_dynamic_input(&val_str, None);
-                    if let Some(doc) = &mut detail.toml_doc {
-                        if let Err(e) = doc.set_entry(&key_path, parsed).and_then(|()| doc.save()) {
-                            self.set_toast(e, true);
-                        } else {
-                            detail.reload_toml();
-                            self.set_toast(format!("Added {key_path}"), false);
-                        }
-                    }
-                }
-            }
-            InlineEditTarget::SettingField { id } => {
-                self.apply_setting_text_edit(&id, &val_str);
-                edit.buffer.clear();
-            }
-        }
-        Vec::new()
-    }
-
-    fn apply_setting_text_edit(&mut self, id: &str, raw: &str) {
-        let cfg_path = &self.paths.config_path;
-        let sec_path = &self.paths.secrets_path;
-        match id {
-            "soul.name" if !raw.is_empty() => {
-                if let Err(e) =
-                    save_monoagens_toml_field(cfg_path, sec_path, &["soul", "name"], Some(value(raw)))
-                {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.soul.name = raw.to_owned();
-                    self.set_toast("Saved soul.name", false);
-                }
-            }
-            "soul.seed" => match raw.parse::<i64>() {
-                Ok(n) if n >= 0 => {
-                    if let Err(e) =
-                        save_monoagens_toml_field(cfg_path, sec_path, &["soul", "seed"], Some(value(n)))
-                    {
-                        self.set_toast(e, true);
-                    } else {
-                        self.gateway_cfg.soul.seed = n as u64;
-                        self.set_toast("Saved soul.seed", false);
-                    }
-                }
-                _ => self.set_toast("soul.seed must be a non-negative integer", true),
-            },
-            "soul.model_path" => {
-                let item = if raw.is_empty() { None } else { Some(value(raw)) };
-                if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["soul", "model_path"], item) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.soul.model_path = (!raw.is_empty()).then(|| PathBuf::from(raw));
-                    self.set_toast("Saved soul.model_path", false);
-                }
-            }
-            "embed.model_path" => {
-                let item = if raw.is_empty() { None } else { Some(value(raw)) };
-                if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["embed", "model_path"], item) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.embed.model_path = (!raw.is_empty()).then(|| PathBuf::from(raw));
-                    self.set_toast("Saved embed.model_path", false);
-                }
-            }
-            "embed.timeout_ms" => match raw.parse::<i64>() {
-                Ok(n) if n > 0 => {
-                    if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["embed", "timeout_ms"], Some(value(n))) {
-                        self.set_toast(e, true);
-                    } else {
-                        self.gateway_cfg.embed.timeout_ms = n as u64;
-                        self.set_toast("Saved embed.timeout_ms", false);
-                    }
-                }
-                _ => self.set_toast("embed.timeout_ms must be > 0", true),
-            },
-            "model.model" if !raw.is_empty() => {
-                if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["model", "model"], Some(value(raw))) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.model.model = raw.to_owned();
-                    self.model_name = raw.to_owned();
-                    self.set_toast("Saved model.model", false);
-                }
-            }
-            "model.temperature" => match raw.parse::<f64>() {
-                Ok(f) if (0.0..=2.0).contains(&f) => {
-                    if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["model", "temperature"], Some(value(f))) {
-                        self.set_toast(e, true);
-                    } else {
-                        self.gateway_cfg.model.temperature = Some(f as f32);
-                        self.set_toast("Saved model.temperature", false);
-                    }
-                }
-                _ => self.set_toast("temperature must be in 0.0..=2.0", true),
-            },
-            "model.output_limits.classify"
-            | "model.output_limits.reason"
-            | "model.output_limits.consolidate" => {
-                let leaf = id.rsplit('.').next().unwrap_or("reason");
-                match raw.parse::<i64>() {
-                    Ok(n) if n > 0 => {
-                        if let Err(e) = save_monoagens_toml_field(
-                            cfg_path,
-                            sec_path,
-                            &["model", "output_limits", leaf],
-                            Some(value(n)),
-                        ) {
-                            self.set_toast(e, true);
-                        } else {
-                            match leaf {
-                                "classify" => self.gateway_cfg.model.output_limits.classify = n as u32,
-                                "reason" => self.gateway_cfg.model.output_limits.reason = n as u32,
-                                _ => self.gateway_cfg.model.output_limits.consolidate = n as u32,
-                            }
-                            self.set_toast(format!("Saved output_limits.{leaf}"), false);
-                        }
-                    }
-                    _ => self.set_toast("Output limit must be > 0", true),
-                }
-            }
-            "model.daily_token_budget" => match raw.parse::<i64>() {
-                Ok(n) if n > 0 => {
-                    if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["model", "daily_token_budget"], Some(value(n))) {
-                        self.set_toast(e, true);
-                    } else {
-                        self.gateway_cfg.model.daily_token_budget = n as u64;
-                        self.daily_token_budget = n as u64;
-                        self.set_toast("Saved daily_token_budget", false);
-                    }
-                }
-                _ => self.set_toast("daily_token_budget must be > 0", true),
-            },
-            "model.output_limit_param" if !raw.is_empty() => {
-                if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["model", "output_limit_param"], Some(value(raw))) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.model.output_limit_param = raw.to_owned();
-                    self.set_toast("Saved output_limit_param", false);
-                }
-            }
-            "valve.max_chain_wakes" => match raw.parse::<i64>() {
-                Ok(n) if (1..=1000).contains(&n) => {
-                    if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["valve", "max_chain_wakes"], Some(value(n))) {
-                        self.set_toast(e, true);
-                    } else {
-                        self.gateway_cfg.valve.max_chain_wakes = n as u32;
-                        self.set_toast("Saved max_chain_wakes", false);
-                    }
-                }
-                _ => self.set_toast("max_chain_wakes must be 1..=1000", true),
-            },
-            "rbac.fallback_role" => {
-                let item = if raw.is_empty() { None } else { Some(value(raw)) };
-                if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["roles", "fallback"], item) {
-                    self.set_toast(e, true);
-                } else {
-                    self.set_toast("Saved roles.fallback", false);
-                }
-            }
-            "secrets.model_endpoint" => {
-                if let Err(e) = save_secret_key(sec_path, "model_endpoint", raw) {
-                    self.set_toast(e, true);
-                } else {
-                    self.secrets_summary.model_endpoint = Some(raw.to_owned());
-                    self.refresh_secrets_summary();
-                    self.set_toast("Saved model_endpoint to secrets.toml (0600)", false);
-                }
-            }
-            "secrets.model_api_key" => {
-                if let Err(e) = save_secret_key(sec_path, "model_api_key", raw) {
-                    self.set_toast(e, true);
-                } else {
-                    self.secrets_summary.model_api_key_set = true;
-                    self.refresh_secrets_summary();
-                    self.set_toast("Saved model_api_key to secrets.toml (0600)", false);
-                }
-            }
-            id if id.starts_with("runtime.") => {
-                let leaf = id.trim_start_matches("runtime.");
-                match raw.parse::<i64>() {
-                    Ok(n) if n > 0 => {
-                        if let Err(e) = save_monoagens_toml_field(cfg_path, sec_path, &["runtime", leaf], Some(value(n))) {
-                            self.set_toast(e, true);
-                        } else {
-                            let u = n as u64;
-                            match leaf {
-                                "hook_timeout_ms" => self.gateway_cfg.runtime.hook_timeout_ms = u,
-                                "action_timeout_ms" => self.gateway_cfg.runtime.action_timeout_ms = u,
-                                "model_timeout_ms" => self.gateway_cfg.runtime.model_timeout_ms = u,
-                                "working_cue_ms" => self.gateway_cfg.runtime.working_cue_ms = u,
-                                "progress_note_ms" => self.gateway_cfg.runtime.progress_note_ms = u,
-                                "body_shutdown_grace_ms" => {
-                                    self.gateway_cfg.runtime.body_shutdown_grace_ms = u;
-                                }
-                                _ => {}
-                            }
-                            self.set_toast(format!("Saved runtime.{leaf}"), false);
-                        }
-                    }
-                    _ => self.set_toast("Timeout must be > 0", true),
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn activate_settings_row(&mut self, index: usize) -> Vec<AppAction> {
-        let rows = self.current_settings_rows();
-        let Some(row) = rows.get(index) else {
-            return Vec::new();
-        };
-        let id = row.id.clone();
-
-        if let Some(pid) = id.strip_prefix("plugin.") {
-            self.open_plugin_detail(pid);
-            return Vec::new();
-        }
-        if id == "secrets.add_env" {
-            self.settings.editing = Some(InlineEditState {
-                target: InlineEditTarget::NewEnvKeyName,
-                prompt: "Enter new [env] variable name (e.g. TELEGRAM_BOT_TOKEN)".to_owned(),
-                buffer: String::new(),
-                masked: false,
-            });
-            return Vec::new();
-        }
-        if let Some(env_k) = id.strip_prefix("secrets.env.") {
-            self.settings.editing = Some(InlineEditState {
-                target: InlineEditTarget::NewEnvSecretValue {
-                    env_key: env_k.to_owned(),
-                },
-                prompt: format!("Enter new secret value for [env].{env_k} (masked)"),
-                buffer: String::new(),
-                masked: true,
-            });
-            return Vec::new();
-        }
-
-        // TUI preferences
-        match id.as_str() {
-            "tui.theme" => {
-                self.prefs.theme = self.prefs.theme.next();
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.message_layout" => {
-                self.prefs.message_layout = self.prefs.message_layout.next();
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.sidebar" => {
-                self.prefs.sidebar = self.prefs.sidebar.next();
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.motion" => {
-                self.prefs.motion = self.prefs.motion.next();
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.shimmer" => {
-                self.prefs.shimmer = self.prefs.shimmer.next();
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.icons" => {
-                self.prefs.icons = self.prefs.icons.next();
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.mouse_support" => {
-                self.prefs.mouse_support = !self.prefs.mouse_support;
-                self.persist_prefs();
-                return vec![AppAction::ToggleMouseCapture(self.prefs.mouse_support)];
-            }
-            "tui.copy_on_select" => {
-                self.prefs.copy_on_select = !self.prefs.copy_on_select;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.auto_chat_title" => {
-                self.prefs.auto_chat_title = !self.prefs.auto_chat_title;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.show_capability_steps" => {
-                self.prefs.show_capability_steps = !self.prefs.show_capability_steps;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.show_turn_duration" => {
-                self.prefs.show_turn_duration = !self.prefs.show_turn_duration;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.show_brain_trace" => {
-                self.prefs.show_brain_trace = !self.prefs.show_brain_trace;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.show_token_budget" => {
-                self.prefs.show_token_budget = !self.prefs.show_token_budget;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.show_cost_estimate" => {
-                self.prefs.show_cost_estimate = !self.prefs.show_cost_estimate;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            "tui.show_valve_badge" => {
-                self.prefs.show_valve_badge = !self.prefs.show_valve_badge;
-                self.persist_prefs();
-                return Vec::new();
-            }
-            _ => {}
-        }
-
-        // Gateway enum / bool cycles
-        let cfg_path = self.paths.config_path.clone();
-        let sec_path = self.paths.secrets_path.clone();
-        match id.as_str() {
-            "soul.online_adaptation" => {
-                let next = !self.gateway_cfg.soul.online_adaptation.unwrap_or(false);
-                if let Err(e) = save_monoagens_toml_field(
-                    &cfg_path,
-                    &sec_path,
-                    &["soul", "online_adaptation"],
-                    Some(value(next)),
-                ) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.soul.online_adaptation = Some(next);
-                    self.set_toast("Saved soul.online_adaptation", false);
-                }
-                return Vec::new();
-            }
-            "embed.backend" => {
-                let next = match self.gateway_cfg.embed.backend {
-                    EmbedBackendKind::None => EmbedBackendKind::Hash,
-                    EmbedBackendKind::Hash => EmbedBackendKind::EmbeddingGemma2Http,
-                    EmbedBackendKind::EmbeddingGemma2Http => EmbedBackendKind::EmbeddingGemma2Stdio,
-                    EmbedBackendKind::EmbeddingGemma2Stdio => EmbedBackendKind::EmbeddingGemma2Remote,
-                    EmbedBackendKind::EmbeddingGemma2Remote => EmbedBackendKind::OpenAiCompatible,
-                    EmbedBackendKind::OpenAiCompatible => EmbedBackendKind::None,
-                };
-                if let Err(e) = save_monoagens_toml_field(
-                    &cfg_path,
-                    &sec_path,
-                    &["embed", "backend"],
-                    Some(value(next.as_str())),
-                ) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.embed.backend = next;
-                    self.set_toast(format!("Saved embed.backend = {}", next.as_str()), false);
-                }
-                return Vec::new();
-            }
-            "model.provider" => {
-                let next = match self.gateway_cfg.model.provider {
-                    ModelProviderKind::OpenAiCompatible => ModelProviderKind::Scripted,
-                    ModelProviderKind::Scripted => ModelProviderKind::OpenAiCompatible,
-                };
-                if let Err(e) = save_monoagens_toml_field(
-                    &cfg_path,
-                    &sec_path,
-                    &["model", "provider"],
-                    Some(value(next.as_str())),
-                ) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.model.provider = next;
-                    self.set_toast(format!("Saved model.provider = {}", next.as_str()), false);
-                }
-                return Vec::new();
-            }
-            "valve.mode" => {
-                let next = match self.gateway_cfg.valve.mode.as_str() {
-                    "enforcing" => "partial",
-                    "partial" => "off",
-                    _ => "enforcing",
-                };
-                if let Err(e) = save_monoagens_toml_field(
-                    &cfg_path,
-                    &sec_path,
-                    &["valve", "mode"],
-                    Some(value(next)),
-                ) {
-                    self.set_toast(e, true);
-                } else {
-                    self.gateway_cfg.valve.mode = next.to_owned();
-                    self.valve_mode = next.to_owned();
-                    self.set_toast(format!("Saved valve.mode = {next}"), false);
-                }
-                return Vec::new();
-            }
-            _ => {}
-        }
-
-        if let Some(toggle_key) = id.strip_prefix("valve.") {
-            let next_val = match toggle_key {
-                "cedar_abac" => {
-                    self.settings.valve_toggles.cedar_abac = !self.settings.valve_toggles.cedar_abac;
-                    self.settings.valve_toggles.cedar_abac
-                }
-                "line2_scope" => {
-                    self.settings.valve_toggles.line2_scope = !self.settings.valve_toggles.line2_scope;
-                    self.settings.valve_toggles.line2_scope
-                }
-                "taint_blocking" => {
-                    self.settings.valve_toggles.taint_blocking = !self.settings.valve_toggles.taint_blocking;
-                    self.settings.valve_toggles.taint_blocking
-                }
-                "pending_approval" => {
-                    self.settings.valve_toggles.pending_approval = !self.settings.valve_toggles.pending_approval;
-                    self.settings.valve_toggles.pending_approval
-                }
-                "budget_guard" => {
-                    self.settings.valve_toggles.budget_guard = !self.settings.valve_toggles.budget_guard;
-                    self.settings.valve_toggles.budget_guard
-                }
-                "chain_brake" => {
-                    self.settings.valve_toggles.chain_brake = !self.settings.valve_toggles.chain_brake;
-                    self.settings.valve_toggles.chain_brake
-                }
-                "quiet_hours" => {
-                    self.settings.valve_toggles.quiet_hours = !self.settings.valve_toggles.quiet_hours;
-                    self.settings.valve_toggles.quiet_hours
-                }
-                "proactive_cap" => {
-                    self.settings.valve_toggles.proactive_cap = !self.settings.valve_toggles.proactive_cap;
-                    self.settings.valve_toggles.proactive_cap
-                }
-                _ => return Vec::new(),
-            };
-            if let Err(e) = save_monoagens_toml_field(
-                &cfg_path,
-                &sec_path,
-                &["valve", toggle_key],
-                Some(value(next_val)),
-            ) {
-                self.set_toast(e, true);
-            } else {
-                self.set_toast(format!("Saved valve.{toggle_key} = {next_val}"), false);
-            }
-            return Vec::new();
-        }
-
-        // Text / Number / MaskedSecret inline prompt
-        match &row.value {
-            SettingValueKind::Text(cur) | SettingValueKind::Number(cur) => {
-                self.settings.editing = Some(InlineEditState {
-                    target: InlineEditTarget::SettingField { id },
-                    prompt: format!("Edit {}", row.label),
-                    buffer: if cur.starts_with('(') || cur == "default" {
-                        String::new()
-                    } else {
-                        cur.clone()
-                    },
-                    masked: false,
-                });
-            }
-            SettingValueKind::MaskedSecret { .. } => {
-                self.settings.editing = Some(InlineEditState {
-                    target: InlineEditTarget::SettingField { id },
-                    prompt: format!("Enter new value for {} (masked, saved 0600)", row.label),
-                    buffer: String::new(),
-                    masked: true,
-                });
-            }
-            SettingValueKind::Bool(_) | SettingValueKind::Cycle(_) | SettingValueKind::Action(_) | SettingValueKind::ReadOnly(_) => {}
-        }
-
-        Vec::new()
-    }
-
-    fn toggle_plugin_running(&mut self, pid: &str) -> Vec<AppAction> {
+    pub(crate) fn toggle_plugin_running(&mut self, pid: &str) -> Vec<AppAction> {
         let Some(p) = self.plugins.iter_mut().find(|p| p.id == pid) else {
             return Vec::new();
         };
         if !p.installed {
-            self.install_plugin_by_id(pid);
+            self.begin_install(pid);
+            return Vec::new();
         }
         let state = self
             .plugins
@@ -3460,32 +2551,6 @@ impl TuiAppState {
         }
     }
 
-    fn install_plugin_by_id(&mut self, pid: &str) {
-        if find_builtin_preset(pid).is_none() {
-            self.set_toast(format!("Plugin '{pid}' has no built-in preset"), true);
-            return;
-        }
-        match install_builtin_plugin(&self.paths.config_path, &self.paths.secrets_path, pid) {
-            Ok(spec) => {
-                self.gateway_cfg.plugins.retain(|p| p.id != pid);
-                self.gateway_cfg.plugins.push(spec);
-                self.refresh_plugins_from_config();
-                self.set_toast(format!("Installed plugin '{pid}'"), false);
-            }
-            Err(e) => self.set_toast(e, true),
-        }
-    }
-
-    fn remove_plugin_by_id(&mut self, pid: &str) {
-        match remove_plugin_from_config(&self.paths.config_path, &self.paths.secrets_path, pid) {
-            Ok(()) => {
-                self.gateway_cfg.plugins.retain(|p| p.id != pid);
-                self.refresh_plugins_from_config();
-                self.set_toast(format!("Removed plugin '{pid}'"), false);
-            }
-            Err(e) => self.set_toast(e, true),
-        }
-    }
 }
 
 /// Builds the merged list of configured plugins and built-in catalog presets.

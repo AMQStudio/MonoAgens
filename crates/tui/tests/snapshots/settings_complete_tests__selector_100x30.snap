@@ -1,0 +1,34 @@
+---
+source: crates/tui/tests/settings_complete_tests.rs
+expression: "render_text(100, 30, &state)"
+---
+                                                                                                   │
+                                                                                                   │
+      ╭ ≡  Settings  (←/→ Tab · ↑/↓ Select · Enter/Space Edit · Esc Back/Close) ─────────────╮     │
+      │  Appearance   Soul & Brain   Model   Valve   RBAC   Providers   Plugins   Runtime    │     │
+      │ ?  Sea╭ Select output_limit_param ───────────────────────────────────────────╮       │     │
+      │───────│ Wire JSON key for max tokens (max_tokens or max_completion_tokens)   │───────│     │
+   * M│   Prov│ Preview: max_completion_tokens - Newer parameter required by reason… │      ││     │
+   Rea│   Outp│                                                                      │      ││     │
+      │ ▸ Budg│  max_tokens                Classic chat-completions parameter        │      ││     │
+   » S│   Usag│❯ max_completion_tokens (c… Newer parameter required by reasoning mo… │      ││     │
+      │   Per-│                                                                      │      ││     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │he…   ┃│     │
+      │       │                                                                      │.r…   ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │      ┃│     │
+      │       │                                                                      │────── │     │
+      │       │ Type to search: ▏                                                    │pleti… │     │
+ ● gpt│       ╰──────────────────────────────────────────────────────────────────────╯       │
+──────╰──────────────────────────────────────────────────────────────────────────────────────╯──────
+ > Message Mono or type / for commands…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v paste

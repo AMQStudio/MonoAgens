@@ -529,6 +529,63 @@ impl GatewayOwner {
         Ok(json!({ "ok": true, "provider_rebuilt": rebuilt }))
     }
 
+    /// `secrets.set` `{env, value}` or `{key, value}`: writes `[env] <NAME>` (plugin environment)
+    /// or one of the top-level keys `model_api_key`, `model_endpoint`, `embed_api_key` into
+    /// `secrets.toml` (mode `0600`, other content kept). A missing `value` removes the entry.
+    /// The value is never echoed or logged.
+    pub fn secrets_set_named(&self, section: &str, name: &str, val: Option<&str>) -> Result<Value, AdminError> {
+        let name = name.trim();
+        let name_ok = !name.is_empty()
+            && name.len() <= 128
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !name_ok {
+            return Err(AdminError::invalid_params(
+                "secret name must be 1..=128 characters of A-Z, a-z, 0-9 or _",
+            ));
+        }
+        match section {
+            "env" => {}
+            "top" if matches!(name, "model_api_key" | "model_endpoint" | "embed_api_key") => {}
+            _ => {
+                return Err(AdminError::invalid_params(format!(
+                    "unsupported secret '{section}.{name}'"
+                )));
+            }
+        }
+        let val = val.map(str::trim);
+        if let Some(v) = val
+            && (v.is_empty() || v.chars().any(char::is_control))
+        {
+            return Err(AdminError::invalid_params("value must be a non-empty single line"));
+        }
+        write_named_secret(&self.secrets_path, section, name, val)
+            .map_err(|e| AdminError::server(format!("failed to write secrets: {e}")))?;
+        if let Some(v) = val
+            && name != "model_endpoint"
+        {
+            self.handle.diagnostics().register_secret(&SecretString::new(v));
+        }
+        self.runlog.info(
+            "settings",
+            &format!("secret {section}.{name} {}", if val.is_some() { "saved" } else { "removed" }),
+        );
+        Ok(json!({ "ok": true }))
+    }
+
+    /// `capabilities.list`: `{capabilities:[{id, body}]}` of every capability registered by a
+    /// connected body (what a body reported in `body/discover`), for RBAC allow/deny pickers.
+    #[must_use]
+    pub fn capabilities_list(&self) -> Value {
+        let caps: Vec<Value> = self
+            .handle
+            .router()
+            .all_capabilities()
+            .into_iter()
+            .map(|c| json!({ "id": c.id.as_str() }))
+            .collect();
+        json!({ "capabilities": caps })
+    }
+
     /// `events.since`: `{total, events, budget}` with the log entries at index `from..`.
     pub async fn events_since(&self, from: usize) -> Result<Value, AdminError> {
         let events = self
@@ -791,9 +848,8 @@ impl GatewayOwner {
 
 /// Sets `[providers.<id>] api_key` in `secrets.toml`, keeping everything else, and leaves the
 /// file at mode `0600` (written to a private temporary file, then renamed into place).
-fn write_provider_key(path: &std::path::Path, id: &str, key: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+/// Public form of the provider key write (used by the first-run wizard, which has no owner yet).
+pub fn write_provider_key(path: &std::path::Path, id: &str, key: &str) -> std::io::Result<()> {
     let raw = std::fs::read_to_string(path).unwrap_or_default();
     if raw.trim_start().starts_with('{') {
         return Err(std::io::Error::other(
@@ -817,6 +873,58 @@ fn write_provider_key(path: &std::path::Path, id: &str, key: &str) -> std::io::R
         .and_then(Item::as_table_like_mut)
         .expect("provider table")
         .insert("api_key", value(key));
+    write_secrets_doc_private(path, &doc)
+}
+
+/// Sets or removes (`val == None`) `[env] <name>` or a top-level key of `secrets.toml`
+/// (same guarantees as [`write_provider_key`]).
+fn write_named_secret(
+    path: &std::path::Path,
+    section: &str,
+    name: &str,
+    val: Option<&str>,
+) -> std::io::Result<()> {
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    if raw.trim_start().starts_with('{') {
+        return Err(std::io::Error::other(
+            "secrets file is JSON; convert it to TOML to store secrets",
+        ));
+    }
+    let mut doc: toml_edit::DocumentMut = raw
+        .parse()
+        .map_err(|e| std::io::Error::other(format!("secrets file is not valid TOML: {e}")))?;
+    if section == "env" {
+        if !doc.get("env").is_some_and(Item::is_table_like) {
+            if val.is_none() {
+                return Ok(());
+            }
+            doc.insert("env", Item::Table(toml_edit::Table::new()));
+        }
+        let env = doc["env"].as_table_like_mut().expect("env table");
+        match val {
+            Some(v) => {
+                env.insert(name, value(v));
+            }
+            None => {
+                env.remove(name);
+            }
+        }
+    } else {
+        match val {
+            Some(v) => {
+                doc.insert(name, value(v));
+            }
+            None => {
+                doc.remove(name);
+            }
+        }
+    }
+    write_secrets_doc_private(path, &doc)
+}
+
+fn write_secrets_doc_private(path: &std::path::Path, doc: &toml_edit::DocumentMut) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -831,6 +939,25 @@ fn write_provider_key(path: &std::path::Path, id: &str, key: &str) -> std::io::R
     f.sync_all()?;
     drop(f);
     std::fs::rename(&tmp, path)
+}
+
+/// Applies a JSON merge `patch` to `monoagens.toml` on disk exactly like `config.apply` does
+/// (`.bak` written first, comments preserved, `null` removes a key, validated before the write)
+/// but without reloading a running gateway. Used by a TUI that has no gateway yet.
+pub fn apply_config_patch_to_file(
+    config_path: &std::path::Path,
+    secrets_path: &std::path::Path,
+    patch: &Value,
+) -> Result<(), ConfigError> {
+    let Some(obj) = patch.as_object() else {
+        return Err(ConfigError::InvalidType {
+            key: "patch".to_owned(),
+            expected: "JSON object",
+        });
+    };
+    update_config_with_backup(config_path, secrets_path, |doc| {
+        merge_table(doc.as_table_mut(), obj, "")
+    })
 }
 
 fn merge_table(

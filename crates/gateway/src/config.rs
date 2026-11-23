@@ -1621,6 +1621,29 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
         }
     }
 
+    if let Some(bases_tbl) = get_opt_table(root, "permission_bases")? {
+        has_rbac = true;
+        for (capability, item) in bases_tbl.iter() {
+            let key = format!("permission_bases.{capability}");
+            let raw = item
+                .as_str()
+                .ok_or_else(|| ConfigError::InvalidType {
+                    key: key.clone(),
+                    expected: "tier name or \"owner-only\"",
+                })?;
+            let tier = if raw.trim().eq_ignore_ascii_case("owner-only") {
+                None
+            } else {
+                Some(RoleTier::parse_str(raw).ok_or_else(|| ConfigError::InvalidValue {
+                    key: key.clone(),
+                    value: raw.to_owned(),
+                    expected: "'guest', 'member', 'trusted', 'admin', 'owner' or 'owner-only'",
+                })?)
+            };
+            rbac.permission_bases.insert(capability.to_owned(), tier);
+        }
+    }
+
     if has_rbac {
         cfg.rbac = Some(rbac);
     }

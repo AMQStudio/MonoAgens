@@ -5,6 +5,10 @@ use std::path::PathBuf;
 use monoagens_gateway::{GatewayConfig, PluginKind, ResolvedPaths};
 
 use crate::config::{DynamicTomlDoc, DynamicTomlEntry, TuiPreferences};
+use crate::list_editor::ItemEditor;
+use crate::pairing::PairingState;
+use crate::rbac_editor::RbacPage;
+use crate::selector::Selector;
 
 /// All 8 tabs in the `/settings` modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -81,14 +85,20 @@ impl SettingsTab {
     #[must_use]
     pub const fn sections(self) -> &'static [&'static str] {
         match self {
-            Self::Appearance => &["Theme & Layout", "Motion & Shimmer", "Chat & Status Line"],
+            Self::Appearance => &["Theme & Layout", "Motion & Shimmer", "Chat & Status Line", "Keybindings"],
             Self::SoulBrain => &["Soul Identity", "Neural Core", "Embeddings"],
-            Self::Model => &["Provider & Model", "Output Limits", "Budget & Headers"],
+            Self::Model => &[
+                "Provider & Model",
+                "Output Limits",
+                "Budget & Headers",
+                "Usage Paths & Prices",
+                "Per-purpose Models",
+            ],
             Self::Valve => &["Enforcement", "Rule Toggles"],
-            Self::Rbac => &["Fallback & Roles", "Places & Persons"],
-            Self::Providers => &["Endpoint & Key", "Plugin [env] Secrets"],
+            Self::Rbac => &["Fallback & Roles", "Actors", "Places & Bases"],
+            Self::Providers => &["Providers", "Legacy Endpoint & Key", "Plugin [env] Secrets"],
             Self::Plugins => &["Configured & Catalog"],
-            Self::Runtime => &["Timeouts & Cues", "Resolved Paths"],
+            Self::Runtime => &["Timeouts & Cues", "Identity Linking", "Storage", "Resolved Paths"],
         }
     }
 }
@@ -218,10 +228,15 @@ pub struct SecretsUiSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingValueKind {
     Bool(bool),
-    Cycle(String),
+    /// Enum: Enter opens the selector; the string is the current label.
+    Select(String),
     Text(String),
     Number(String),
+    /// Filesystem path (validated on save).
+    Path(String),
     MaskedSecret { is_set: bool },
+    List(Vec<String>),
+    Map(Vec<(String, String)>),
     Action(String),
     ReadOnly(String),
 }
@@ -290,6 +305,45 @@ impl PluginDetailState {
     }
 }
 
+/// A yes/no question shown over `/settings`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmState {
+    pub prompt: String,
+    pub action: ConfirmAction,
+}
+
+/// What a confirmed question does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmAction {
+    RemovePlugin(String),
+    DeleteRole(String),
+    DeletePlace(String),
+    DeleteBase(String),
+    RemoveActor(String),
+}
+
+/// Guided install of a catalog plugin (command path, kind, enable).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallFlow {
+    pub plugin_id: String,
+    pub kind: PluginKind,
+    /// Binary found on disk or on `PATH`.
+    pub command: Option<String>,
+    /// Name of the binary that was looked for (shown with the build hint).
+    pub binary: String,
+    pub enable: bool,
+    pub hint: String,
+}
+
+/// Known ids for the RBAC pickers, refreshed from the gateway.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RbacHints {
+    /// Capability ids of connected bodies (`capabilities.list`).
+    pub capabilities: Vec<String>,
+    /// Actors seen in the event log (`events.query`).
+    pub actors: Vec<String>,
+}
+
 /// Complete state of the `/settings` 8-tab 2-pane modal.
 #[derive(Debug, Clone, Default)]
 pub struct SettingsModalState {
@@ -302,6 +356,22 @@ pub struct SettingsModalState {
     pub editing: Option<InlineEditState>,
     pub plugin_detail: Option<PluginDetailState>,
     pub valve_toggles: ValveRuleTogglesState,
+    /// Enum selector over the list.
+    pub selector: Option<Selector>,
+    /// List / map editor over the list.
+    pub items: Option<ItemEditor>,
+    /// Entries of the map being edited as last saved (to null out removed keys).
+    pub items_base: Vec<(String, String)>,
+    /// RBAC sub-page (role, actor, place, permission base) in place of the list.
+    pub rbac_page: Option<RbacPage>,
+    /// Main-list selection to restore when the RBAC sub-page closes.
+    pub page_return: Option<(usize, usize)>,
+    pub pairing: Option<PairingState>,
+    pub confirm: Option<ConfirmState>,
+    pub install: Option<InstallFlow>,
+    pub hints: RbacHints,
+    /// Rows the list showed in the last frame (written by the renderer).
+    pub list_rows: std::cell::Cell<usize>,
 }
 
 impl SettingsModalState {
@@ -313,30 +383,80 @@ impl SettingsModalState {
         self.selected_index = 0;
         self.scroll_offset = 0;
         self.search_query.clear();
+        self.close_subviews();
+    }
+
+    /// Closes every editor, sub-page and dialog opened over the list.
+    pub fn close_subviews(&mut self) {
         self.editing = None;
         self.plugin_detail = None;
+        self.selector = None;
+        self.items = None;
+        self.rbac_page = None;
+        self.page_return = None;
+        self.pairing = None;
+        self.confirm = None;
+        self.install = None;
     }
 
     /// Closes the modal and clears transient edit buffers.
     pub fn close(&mut self) {
         self.open = false;
         self.search_query.clear();
-        self.editing = None;
-        self.plugin_detail = None;
+        self.close_subviews();
+    }
+
+    /// Whether an editor, dialog or sub-page is open over the list.
+    #[must_use]
+    pub fn has_subview(&self) -> bool {
+        self.editing.is_some()
+            || self.plugin_detail.is_some()
+            || self.selector.is_some()
+            || self.items.is_some()
+            || self.rbac_page.is_some()
+            || self.pairing.is_some()
+            || self.confirm.is_some()
+            || self.install.is_some()
     }
 }
 
-/// First-run Setup Wizard steps when `model_api_key` is missing for `openai_compatible`.
+/// First-run Setup Wizard steps: provider, (custom only) endpoint, key + test, model, plugins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WizardStep {
+    /// Provider list from the catalog (search, scrollbar).
     Step1Provider,
+    /// Raw endpoint: only for the `custom` provider.
+    StepEndpoint,
+    /// API key (masked) and connection test.
+    StepKey,
+    /// Model picker over the discovered list.
+    StepModel,
     Step2Plugins,
 }
 
-/// Centered 2-step first-run Setup Wizard state.
+/// One catalog provider in the wizard list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WizardProvider {
+    pub id: String,
+    pub label: String,
+    pub keyless: bool,
+}
+
+/// State of the connection test.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum WizardKeyPhase {
+    #[default]
+    Editing,
+    Testing,
+    Failed(String),
+    Ok { models: usize, latency_ms: u64 },
+}
+
+/// Centered first-run Setup Wizard state.
 #[derive(Debug, Clone)]
 pub struct SetupWizardState {
     pub step: WizardStep,
+    /// Raw endpoint (`custom` provider) or the legacy endpoint.
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
@@ -346,6 +466,20 @@ pub struct SetupWizardState {
     pub plugin_enabled: Vec<bool>,
     pub plugin_cursor: usize,
     pub error: Option<String>,
+    pub providers: Vec<WizardProvider>,
+    pub provider: Option<String>,
+    pub search: String,
+    pub sel: usize,
+    pub off: usize,
+    pub key_phase: WizardKeyPhase,
+    /// Models to choose from (discovered, or the catalog seed list when the test failed).
+    pub models: Vec<String>,
+    pub model_search: String,
+    pub model_sel: usize,
+    pub model_off: usize,
+    /// `[model.provider_options] base_url` already in the config (a proxy, for example); used
+    /// by the connection test of catalog providers. Never asked for.
+    pub base_override: Option<String>,
 }
 
 impl SetupWizardState {
@@ -353,6 +487,10 @@ impl SetupWizardState {
     #[must_use]
     pub fn new(cfg: &GatewayConfig, endpoint: Option<&str>, plugin_ids: Vec<String>) -> Self {
         let len = plugin_ids.len();
+        let providers: Vec<WizardProvider> = monoagens_reason::model::catalog::entries()
+            .iter()
+            .map(|e| WizardProvider { id: e.id.clone(), label: e.label.clone(), keyless: e.keyless })
+            .collect();
         Self {
             step: WizardStep::Step1Provider,
             endpoint: endpoint
@@ -367,6 +505,17 @@ impl SetupWizardState {
             plugin_enabled: vec![false; len],
             plugin_cursor: 0,
             error: None,
+            providers,
+            provider: None,
+            search: String::new(),
+            sel: 0,
+            off: 0,
+            key_phase: WizardKeyPhase::Editing,
+            models: Vec::new(),
+            model_search: String::new(),
+            model_sel: 0,
+            model_off: 0,
+            base_override: cfg.model.provider_base_url.clone(),
         }
     }
 
@@ -380,9 +529,76 @@ impl SetupWizardState {
             format!("{dots} ({} chars)", self.api_key.chars().count())
         }
     }
+
+    /// Providers matching the search text.
+    #[must_use]
+    pub fn filtered_providers(&self) -> Vec<&WizardProvider> {
+        let q = self.search.trim().to_lowercase();
+        self.providers
+            .iter()
+            .filter(|p| q.is_empty() || p.id.to_lowercase().contains(&q) || p.label.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    /// Models matching the search text.
+    #[must_use]
+    pub fn filtered_models(&self) -> Vec<&String> {
+        let q = self.model_search.trim().to_lowercase();
+        self.models.iter().filter(|m| q.is_empty() || m.to_lowercase().contains(&q)).collect()
+    }
 }
 
-/// Builds the filtered option rows for the active `/settings` tab.
+/// Catalog provider as the Providers tab shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSummary {
+    pub id: String,
+    pub label: String,
+    pub keyless: bool,
+    pub key_set: bool,
+    pub key_source: Option<String>,
+}
+
+/// Inputs of [`build_settings_rows_with`].
+pub struct RowsCtx<'a> {
+    pub prefs: &'a TuiPreferences,
+    pub cfg: &'a GatewayConfig,
+    pub paths: &'a ResolvedPaths,
+    pub secrets: &'a SecretsUiSummary,
+    pub valve_toggles: &'a ValveRuleTogglesState,
+    pub plugins: &'a [PluginUiEntry],
+    pub providers: &'a [ProviderSummary],
+    pub bindings: &'a [(String, String)],
+    pub model_name: &'a str,
+}
+
+fn row(id: &str, section: &'static str, label: &str, description: &str, value: SettingValueKind) -> SettingRow {
+    SettingRow {
+        id: id.to_owned(),
+        section,
+        label: label.to_owned(),
+        description: description.to_owned(),
+        value,
+    }
+}
+
+fn opt_path(p: Option<&PathBuf>, none: &str) -> String {
+    p.map_or_else(|| none.to_owned(), |p| p.display().to_string())
+}
+
+fn key_status(p: &ProviderSummary) -> String {
+    if p.keyless {
+        "keyless".to_owned()
+    } else if p.key_set {
+        match &p.key_source {
+            Some(src) if src != "secrets" => format!("key set ({src})"),
+            _ => "key set".to_owned(),
+        }
+    } else {
+        "key missing".to_owned()
+    }
+}
+
+/// Builds the filtered option rows for the active `/settings` tab (compatibility wrapper).
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn build_settings_rows(
@@ -395,415 +611,276 @@ pub fn build_settings_rows(
     valve_toggles: &ValveRuleTogglesState,
     plugins: &[PluginUiEntry],
 ) -> Vec<SettingRow> {
+    build_settings_rows_with(
+        tab,
+        search_query,
+        &RowsCtx {
+            prefs,
+            cfg,
+            paths,
+            secrets,
+            valve_toggles,
+            plugins,
+            providers: &[],
+            bindings: &[],
+            model_name: &cfg.model.model,
+        },
+    )
+}
+
+/// All rows of every tab, unfiltered (used by the coverage test and the palette).
+#[must_use]
+pub fn all_settings_rows(ctx: &RowsCtx<'_>) -> Vec<(SettingsTab, SettingRow)> {
+    SettingsTab::ALL
+        .iter()
+        .flat_map(|t| {
+            build_settings_rows_with(*t, "", ctx)
+                .into_iter()
+                .map(move |r| (*t, r))
+        })
+        .collect()
+}
+
+/// Builds the filtered option rows for the active `/settings` tab.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &RowsCtx<'_>) -> Vec<SettingRow> {
+    use SettingValueKind as V;
+    let RowsCtx { prefs, cfg, paths, secrets, valve_toggles, plugins, providers, bindings, model_name } = ctx;
+    let sel = |s: &str| V::Select(s.to_owned());
     let mut rows = match tab {
-        SettingsTab::Appearance => vec![
-            SettingRow {
-                id: "tui.theme".to_owned(),
-                section: "Theme & Layout",
-                label: "Theme".to_owned(),
-                description: "Color palette (Titanium, Slate, Terracotta, Light)".to_owned(),
-                value: SettingValueKind::Cycle(prefs.theme.label().to_owned()),
-            },
-            SettingRow {
-                id: "tui.message_layout".to_owned(),
-                section: "Theme & Layout",
-                label: "Message Layout".to_owned(),
-                description: "Chat bubbles vs full-width stream".to_owned(),
-                value: SettingValueKind::Cycle(prefs.message_layout.label().to_owned()),
-            },
-            SettingRow {
-                id: "tui.sidebar".to_owned(),
-                section: "Theme & Layout",
-                label: "Sidebar".to_owned(),
-                description: "Auto (>=120 cols), Open, or Closed".to_owned(),
-                value: SettingValueKind::Cycle(prefs.sidebar.label().to_owned()),
-            },
-            SettingRow {
-                id: "tui.motion".to_owned(),
-                section: "Motion & Shimmer",
-                label: "Motion".to_owned(),
-                description: "tachyonfx animations (Full, Reduced, Off)".to_owned(),
-                value: SettingValueKind::Cycle(prefs.motion.label().to_owned()),
-            },
-            SettingRow {
-                id: "tui.shimmer".to_owned(),
-                section: "Motion & Shimmer",
-                label: "Shimmer".to_owned(),
-                description: "Thinking status shimmer (Classic, Subtle, Off)".to_owned(),
-                value: SettingValueKind::Cycle(prefs.shimmer.label().to_owned()),
-            },
-            SettingRow {
-                id: "tui.icons".to_owned(),
-                section: "Theme & Layout",
-                label: "Icons".to_owned(),
-                description: "Chrome icons: Symbols (single-width) or Emoji".to_owned(),
-                value: SettingValueKind::Cycle(prefs.icons.label().to_owned()),
-            },
-            SettingRow {
-                id: "tui.mouse_support".to_owned(),
-                section: "Motion & Shimmer",
-                label: "Mouse Support".to_owned(),
-                description: "Enable wheel scroll and click hit-testing".to_owned(),
-                value: SettingValueKind::Bool(prefs.mouse_support),
-            },
-            SettingRow {
-                id: "tui.copy_on_select".to_owned(),
-                section: "Motion & Shimmer",
-                label: "Copy on Select".to_owned(),
-                description: "Auto-copy dragged chat selection on mouse release".to_owned(),
-                value: SettingValueKind::Bool(prefs.copy_on_select),
-            },
-            SettingRow {
-                id: "tui.auto_chat_title".to_owned(),
-                section: "Chat & Status Line",
-                label: "Auto Chat Title".to_owned(),
-                description: "LLM auto-naming & topic-shift re-titling".to_owned(),
-                value: SettingValueKind::Bool(prefs.auto_chat_title),
-            },
-            SettingRow {
-                id: "tui.show_capability_steps".to_owned(),
-                section: "Chat & Status Line",
-                label: "Show Capability Steps".to_owned(),
-                description: "Render ┌─ ... └─ tool execution blocks".to_owned(),
-                value: SettingValueKind::Bool(prefs.show_capability_steps),
-            },
-            SettingRow {
-                id: "tui.show_turn_duration".to_owned(),
-                section: "Chat & Status Line",
-                label: "Show Turn Duration".to_owned(),
-                description: "Display elapsed reply time below replies".to_owned(),
-                value: SettingValueKind::Bool(prefs.show_turn_duration),
-            },
-            SettingRow {
-                id: "tui.show_brain_trace".to_owned(),
-                section: "Chat & Status Line",
-                label: "Show Brain Trace (Lab)".to_owned(),
-                description: "Show dim brain telemetry in /lab mode".to_owned(),
-                value: SettingValueKind::Bool(prefs.show_brain_trace),
-            },
-            SettingRow {
-                id: "tui.show_token_budget".to_owned(),
-                section: "Chat & Status Line",
-                label: "Status: Token Budget %".to_owned(),
-                description: "Show daily budget usage % on status line".to_owned(),
-                value: SettingValueKind::Bool(prefs.show_token_budget),
-            },
-            SettingRow {
-                id: "tui.show_cost_estimate".to_owned(),
-                section: "Chat & Status Line",
-                label: "Status: Cost Estimate".to_owned(),
-                description: "Show estimated session cost on status line".to_owned(),
-                value: SettingValueKind::Bool(prefs.show_cost_estimate),
-            },
-            SettingRow {
-                id: "tui.show_valve_badge".to_owned(),
-                section: "Chat & Status Line",
-                label: "Status: Valve Badge".to_owned(),
-                description: "Show active Valve mode on status line".to_owned(),
-                value: SettingValueKind::Bool(prefs.show_valve_badge),
-            },
-        ],
+        SettingsTab::Appearance => {
+            let mut v = vec![
+                row("tui.theme", "Theme & Layout", "Theme", "Color palette (Titanium, Slate, Terracotta, Light)", sel(prefs.theme.label())),
+                row("tui.message_layout", "Theme & Layout", "Message Layout", "Chat bubbles vs full-width stream", sel(prefs.message_layout.label())),
+                row("tui.sidebar", "Theme & Layout", "Sidebar", "Auto (>=120 cols), Open, or Closed", sel(prefs.sidebar.label())),
+                row("tui.motion", "Motion & Shimmer", "Motion", "tachyonfx animations (Full, Reduced, Off)", sel(prefs.motion.label())),
+                row("tui.shimmer", "Motion & Shimmer", "Shimmer", "Thinking status shimmer (Classic, Subtle, Off)", sel(prefs.shimmer.label())),
+                row("tui.icons", "Theme & Layout", "Icons", "Chrome icons: Symbols (single-width) or Emoji", sel(prefs.icons.label())),
+                row("tui.mouse_support", "Motion & Shimmer", "Mouse Support", "Enable wheel scroll and click hit-testing", V::Bool(prefs.mouse_support)),
+                row("tui.copy_on_select", "Motion & Shimmer", "Copy on Select", "Auto-copy dragged chat selection on mouse release", V::Bool(prefs.copy_on_select)),
+                row("tui.auto_chat_title", "Chat & Status Line", "Auto Chat Title", "LLM auto-naming & topic-shift re-titling", V::Bool(prefs.auto_chat_title)),
+                row("tui.show_capability_steps", "Chat & Status Line", "Show Capability Steps", "Render tool execution blocks in the chat", V::Bool(prefs.show_capability_steps)),
+                row("tui.show_turn_duration", "Chat & Status Line", "Show Turn Duration", "Display elapsed reply time below replies", V::Bool(prefs.show_turn_duration)),
+                row("tui.show_brain_trace", "Chat & Status Line", "Show Brain Trace (Lab)", "Show dim brain telemetry in /lab mode", V::Bool(prefs.show_brain_trace)),
+                row("tui.show_token_budget", "Chat & Status Line", "Status: Token Budget %", "Show daily budget usage % on status line", V::Bool(prefs.show_token_budget)),
+                row("tui.show_cost_estimate", "Chat & Status Line", "Status: Cost Estimate", "Show estimated session cost on status line", V::Bool(prefs.show_cost_estimate)),
+                row("tui.show_valve_badge", "Chat & Status Line", "Status: Valve Badge", "Show active Valve mode on status line", V::Bool(prefs.show_valve_badge)),
+                row("tui.conv.notifications", "Chat & Status Line", "Notifications", "Notify when the terminal is unfocused and a reply or approval arrives (off, bell, desktop, both)", sel(prefs.conv.notifications.label())),
+                row("tui.conv.live_draft_preview", "Chat & Status Line", "Live draft preview", "Show the reply draft while the model writes", V::Bool(prefs.conv.live_draft_preview)),
+                row("tui.conv.image_preview", "Chat & Status Line", "Image preview", "Show inline previews of image attachments where the terminal supports it", V::Bool(prefs.conv.image_preview)),
+                row("tui.autocomplete_limit", "Chat & Status Line", "Slash Menu Rows", "Visible rows of the / menu (1..=10); it scrolls past that", V::Number(prefs.autocomplete_limit.to_string())),
+            ];
+            v.push(row(
+                "keys.edit",
+                "Keybindings",
+                "Key bindings",
+                "Rebind actions; stored in keybindings.toml next to tui.toml (? shows the current keys)",
+                V::Map(bindings.to_vec()),
+            ));
+            v
+        }
         SettingsTab::SoulBrain => vec![
-            SettingRow {
-                id: "soul.name".to_owned(),
-                section: "Soul Identity",
-                label: "soul.name".to_owned(),
-                description: "Persistent soul display name".to_owned(),
-                value: SettingValueKind::Text(cfg.soul.name.clone()),
-            },
-            SettingRow {
-                id: "soul.seed".to_owned(),
-                section: "Soul Identity",
-                label: "soul.seed".to_owned(),
-                description: "Deterministic PRNG seed".to_owned(),
-                value: SettingValueKind::Number(cfg.soul.seed.to_string()),
-            },
-            SettingRow {
-                id: "soul.model_path".to_owned(),
-                section: "Neural Core",
-                label: "soul.model_path".to_owned(),
-                description: "Optional .safetensors neural gate weights path".to_owned(),
-                value: SettingValueKind::Text(
-                    cfg.soul
-                        .model_path
-                        .as_ref()
-                        .map_or_else(|| "(neutral fallback)".to_owned(), |p| p.display().to_string()),
-                ),
-            },
-            SettingRow {
-                id: "soul.online_adaptation".to_owned(),
-                section: "Neural Core",
-                label: "soul.online_adaptation".to_owned(),
-                description: "Online 3-factor Hebbian / LinUCB adaptation".to_owned(),
-                value: SettingValueKind::Bool(cfg.soul.online_adaptation.unwrap_or(false)),
-            },
-            SettingRow {
-                id: "embed.backend".to_owned(),
-                section: "Embeddings",
-                label: "embed.backend".to_owned(),
-                description: "Pre-queue embedder backend".to_owned(),
-                value: SettingValueKind::Cycle(cfg.embed.backend.as_str().to_owned()),
-            },
-            SettingRow {
-                id: "embed.model_path".to_owned(),
-                section: "Embeddings",
-                label: "embed.model_path".to_owned(),
-                description: "Local embedding model directory".to_owned(),
-                value: SettingValueKind::Text(
-                    cfg.embed
-                        .model_path
-                        .as_ref()
-                        .map_or_else(|| "(auto / unset)".to_owned(), |p| p.display().to_string()),
-                ),
-            },
-            SettingRow {
-                id: "embed.timeout_ms".to_owned(),
-                section: "Embeddings",
-                label: "embed.timeout_ms".to_owned(),
-                description: "Pre-queue embedding timeout in ms".to_owned(),
-                value: SettingValueKind::Number(cfg.embed.timeout_ms.to_string()),
-            },
+            row("soul.name", "Soul Identity", "soul.name", "Persistent soul display name", V::Text(cfg.soul.name.clone())),
+            row("soul.seed", "Soul Identity", "soul.seed", "Deterministic PRNG seed", V::Number(cfg.soul.seed.to_string())),
+            row("soul.core_config", "Neural Core", "soul.core_config", "Optional CoreConfig JSON file", V::Path(opt_path(cfg.soul.core_config.as_ref(), "(default)"))),
+            row("soul.model_path", "Neural Core", "soul.model_path", "Optional .safetensors neural gate weights path", V::Path(opt_path(cfg.soul.model_path.as_ref(), "(neutral fallback)"))),
+            row("soul.expected_blake3", "Neural Core", "soul.expected_blake3", "Expected BLAKE3 of the weights file (64 hex characters)", V::Text(cfg.soul.expected_blake3.clone().unwrap_or_else(|| "(unset)".to_owned()))),
+            row("soul.online_adaptation", "Neural Core", "soul.online_adaptation", "Online 3-factor Hebbian / LinUCB adaptation", V::Bool(cfg.soul.online_adaptation.unwrap_or(false))),
+            row("embed.backend", "Embeddings", "embed.backend", "Pre-queue embedder backend", sel(cfg.embed.backend.as_str())),
+            row("embed.model_ver", "Embeddings", "embed.model_ver", "Embedding model version tag stored with vectors", V::Text(cfg.embed.model_ver.clone())),
+            row("embed.dim_d", "Embeddings", "embed.dim_d", "Embedding dimension", V::Number(cfg.embed.dim_d.to_string())),
+            row("embed.timeout_ms", "Embeddings", "embed.timeout_ms", "Pre-queue embedding timeout in ms", V::Number(cfg.embed.timeout_ms.to_string())),
+            row("embed.model_path", "Embeddings", "embed.model_path", "Local embedding model directory", V::Path(opt_path(cfg.embed.model_path.as_ref(), "(auto / unset)"))),
+            row("embed.endpoint_url", "Embeddings", "embed.endpoint_url", "Sidecar or remote embeddings endpoint", V::Text(cfg.embed.endpoint_url.clone().unwrap_or_else(|| "(unset)".to_owned()))),
+            row("embed.program", "Embeddings", "embed.program", "Sidecar program for the stdio backend", V::Text(cfg.embed.program.clone().unwrap_or_else(|| "(unset)".to_owned()))),
+            row("embed.args", "Embeddings", "embed.args", "Arguments passed to the sidecar program", V::List(cfg.embed.args.clone())),
+            row("embed.remote_model", "Embeddings", "embed.remote_model", "Model name sent to a remote embeddings endpoint", V::Text(cfg.embed.remote_model.clone().unwrap_or_else(|| "(unset)".to_owned()))),
         ],
-        SettingsTab::Model => vec![
-            SettingRow {
-                id: "model.provider".to_owned(),
-                section: "Provider & Model",
-                label: "model.provider".to_owned(),
-                description: "openai_compatible or scripted".to_owned(),
-                value: SettingValueKind::Cycle(cfg.model.provider.as_str().to_owned()),
-            },
-            SettingRow {
-                id: "model.model".to_owned(),
-                section: "Provider & Model",
-                label: "model.model".to_owned(),
-                description: "Model profile / deployment identifier".to_owned(),
-                value: SettingValueKind::Text(cfg.model.model.clone()),
-            },
-            SettingRow {
-                id: "model.temperature".to_owned(),
-                section: "Provider & Model",
-                label: "model.temperature".to_owned(),
-                description: "Sampling temperature (0.0..=2.0)".to_owned(),
-                value: SettingValueKind::Number(
-                    cfg.model
-                        .temperature
-                        .map_or_else(|| "default".to_owned(), |t| format!("{t:.2}")),
+        SettingsTab::Model => {
+            let m = &cfg.model;
+            let provider_label = m
+                .catalog_provider
+                .clone()
+                .unwrap_or_else(|| m.provider.as_str().to_owned());
+            let mut v = vec![
+                row("model.provider", "Provider & Model", "Provider", "Open the provider picker (same screen as /model)", V::Action(provider_label)),
+                row("model.model", "Provider & Model", "Model", "Open the model picker with search (same screen as /model)", V::Action((*model_name).to_owned())),
+                row("model.provider_options.base_url", "Provider & Model", "Base URL override", "Overrides the provider's base URL (empty removes it)", V::Text(m.provider_base_url.clone().unwrap_or_else(|| "(provider default)".to_owned()))),
+                row("model.temperature", "Provider & Model", "model.temperature", "Sampling temperature (0.0..=2.0, empty = provider default)", V::Number(m.temperature.map_or_else(|| "default".to_owned(), |t| format!("{t:.2}")))),
+                row("model.max_output_tokens", "Output Limits", "max_output_tokens", "Hard cap on output tokens for every purpose (empty = none)", V::Number(m.max_output_tokens.map_or_else(|| "(none)".to_owned(), |n| n.to_string()))),
+                row("model.output_limits.classify", "Output Limits", "output_limits.classify", "Max output tokens for Classify calls", V::Number(m.output_limits.classify.to_string())),
+                row("model.output_limits.reason", "Output Limits", "output_limits.reason", "Max output tokens for Reason calls", V::Number(m.output_limits.reason.to_string())),
+                row("model.output_limits.consolidate", "Output Limits", "output_limits.consolidate", "Max output tokens for Consolidate calls", V::Number(m.output_limits.consolidate.to_string())),
+                row("model.daily_token_budget", "Budget & Headers", "daily_token_budget", "UTC-day token budget cap", V::Number(m.daily_token_budget.to_string())),
+                row("model.output_limit_param", "Budget & Headers", "output_limit_param", "Wire JSON key for max tokens (max_tokens or max_completion_tokens)", sel(&m.output_limit_param)),
+                row("model.extra_headers", "Budget & Headers", "extra_headers", "Extra HTTP headers sent with every model request", V::Map(m.extra_headers.clone())),
+            ];
+            let up = &m.usage_paths;
+            for (key, val) in [
+                ("input_tokens", up.input_tokens.clone()),
+                ("output_tokens", up.output_tokens.clone()),
+                ("cached_tokens", up.cached_tokens.clone()),
+                ("reasoning_tokens", up.reasoning_tokens.clone()),
+                ("total_tokens", up.total_tokens.clone()),
+                ("cost", up.cost.clone().unwrap_or_default()),
+            ] {
+                v.push(row(
+                    &format!("model.usage_paths.{key}"),
+                    "Usage Paths & Prices",
+                    &format!("usage_paths.{key}"),
+                    "JSON path of this counter in the provider's usage object",
+                    V::Text(val),
+                ));
+            }
+            v.push(row(
+                "model.prices",
+                "Usage Paths & Prices",
+                "prices",
+                "USD per million tokens as 'input,output' per provider/model (drives cost estimates)",
+                V::Map(
+                    m.prices
+                        .iter()
+                        .map(|(k, p)| (k.clone(), format!("{},{}", p.input_per_mtok, p.output_per_mtok)))
+                        .collect(),
                 ),
-            },
-            SettingRow {
-                id: "model.output_limits.classify".to_owned(),
-                section: "Output Limits",
-                label: "output_limits.classify".to_owned(),
-                description: "Max output tokens for Classify calls".to_owned(),
-                value: SettingValueKind::Number(cfg.model.output_limits.classify.to_string()),
-            },
-            SettingRow {
-                id: "model.output_limits.reason".to_owned(),
-                section: "Output Limits",
-                label: "output_limits.reason".to_owned(),
-                description: "Max output tokens for Reason calls".to_owned(),
-                value: SettingValueKind::Number(cfg.model.output_limits.reason.to_string()),
-            },
-            SettingRow {
-                id: "model.output_limits.consolidate".to_owned(),
-                section: "Output Limits",
-                label: "output_limits.consolidate".to_owned(),
-                description: "Max output tokens for Consolidate calls".to_owned(),
-                value: SettingValueKind::Number(cfg.model.output_limits.consolidate.to_string()),
-            },
-            SettingRow {
-                id: "model.daily_token_budget".to_owned(),
-                section: "Budget & Headers",
-                label: "daily_token_budget".to_owned(),
-                description: "UTC-day token budget cap".to_owned(),
-                value: SettingValueKind::Number(cfg.model.daily_token_budget.to_string()),
-            },
-            SettingRow {
-                id: "model.output_limit_param".to_owned(),
-                section: "Budget & Headers",
-                label: "output_limit_param".to_owned(),
-                description: "Wire JSON key for max tokens".to_owned(),
-                value: SettingValueKind::Text(cfg.model.output_limit_param.clone()),
-            },
-        ],
-        SettingsTab::Valve => vec![
-            SettingRow {
-                id: "valve.mode".to_owned(),
-                section: "Enforcement",
-                label: "valve.mode".to_owned(),
-                description: "enforcing | partial | off".to_owned(),
-                value: SettingValueKind::Cycle(cfg.valve.mode.clone()),
-            },
-            SettingRow {
-                id: "valve.max_chain_wakes".to_owned(),
-                section: "Enforcement",
-                label: "max_chain_wakes".to_owned(),
-                description: "Circuit-breaker limit for chained wakes".to_owned(),
-                value: SettingValueKind::Number(cfg.valve.max_chain_wakes.to_string()),
-            },
-            SettingRow {
-                id: "valve.cedar_abac".to_owned(),
-                section: "Rule Toggles",
-                label: "cedar_abac".to_owned(),
-                description: "Cedar policy ABAC evaluation".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.cedar_abac),
-            },
-            SettingRow {
-                id: "valve.line2_scope".to_owned(),
-                section: "Rule Toggles",
-                label: "line2_scope".to_owned(),
-                description: "VisibleScope Line-2 audience boundary".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.line2_scope),
-            },
-            SettingRow {
-                id: "valve.taint_blocking".to_owned(),
-                section: "Rule Toggles",
-                label: "taint_blocking".to_owned(),
-                description: "3-door taint quarantine enforcement".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.taint_blocking),
-            },
-            SettingRow {
-                id: "valve.pending_approval".to_owned(),
-                section: "Rule Toggles",
-                label: "pending_approval".to_owned(),
-                description: "Hold high-risk actions for owner approval".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.pending_approval),
-            },
-            SettingRow {
-                id: "valve.budget_guard".to_owned(),
-                section: "Rule Toggles",
-                label: "budget_guard".to_owned(),
-                description: "Enforce daily_token_budget".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.budget_guard),
-            },
-            SettingRow {
-                id: "valve.chain_brake".to_owned(),
-                section: "Rule Toggles",
-                label: "chain_brake".to_owned(),
-                description: "Enforce max_chain_wakes circuit breaker".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.chain_brake),
-            },
-            SettingRow {
-                id: "valve.quiet_hours".to_owned(),
-                section: "Rule Toggles",
-                label: "quiet_hours".to_owned(),
-                description: "Defer non-urgent outbound notifications in quiet hours".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.quiet_hours),
-            },
-            SettingRow {
-                id: "valve.proactive_cap".to_owned(),
-                section: "Rule Toggles",
-                label: "proactive_cap".to_owned(),
-                description: "Daily cap on unsolicited proactive notifications".to_owned(),
-                value: SettingValueKind::Bool(valve_toggles.proactive_cap),
-            },
-        ],
+            ));
+            for purpose in ["reason", "classify", "consolidate"] {
+                let pm = m.purposes.get(purpose);
+                v.push(row(
+                    &format!("model.purposes.{purpose}.model"),
+                    "Per-purpose Models",
+                    &format!("{purpose}.model"),
+                    "Model for this purpose only (empty = use the main model)",
+                    V::Text(pm.map_or_else(|| "(main model)".to_owned(), |p| p.model.clone())),
+                ));
+                v.push(row(
+                    &format!("model.purposes.{purpose}.provider"),
+                    "Per-purpose Models",
+                    &format!("{purpose}.provider"),
+                    "Provider for this purpose (default: the main provider)",
+                    sel(pm.and_then(|p| p.catalog_provider.as_deref()).unwrap_or("(main provider)")),
+                ));
+            }
+            v
+        }
+        SettingsTab::Valve => {
+            let mut v = vec![
+                row("valve.mode", "Enforcement", "valve.mode", "enforcing | partial | off", sel(&cfg.valve.mode)),
+                row("valve.max_chain_wakes", "Enforcement", "max_chain_wakes", "Circuit-breaker limit for chained wakes", V::Number(cfg.valve.max_chain_wakes.to_string())),
+            ];
+            let on = |k: &str| match k {
+                "cedar_abac" => valve_toggles.cedar_abac,
+                "line2_scope" => valve_toggles.line2_scope,
+                "taint_blocking" => valve_toggles.taint_blocking,
+                "pending_approval" => valve_toggles.pending_approval,
+                "budget_guard" => valve_toggles.budget_guard,
+                "chain_brake" => valve_toggles.chain_brake,
+                "quiet_hours" => valve_toggles.quiet_hours,
+                _ => valve_toggles.proactive_cap,
+            };
+            for (key, desc) in crate::settings_fields::VALVE_TOGGLES {
+                v.push(row(&format!("valve.{key}"), "Rule Toggles", key, desc, V::Bool(on(key))));
+            }
+            v
+        }
         SettingsTab::Rbac => {
             let mut out = Vec::new();
-            let fallback = cfg
-                .rbac
-                .as_ref()
-                .and_then(|r| r.fallback_role.as_deref())
-                .unwrap_or("(none)");
-            out.push(SettingRow {
-                id: "rbac.fallback_role".to_owned(),
-                section: "Fallback & Roles",
-                label: "roles.fallback".to_owned(),
-                description: "Fallback role for unbound actors".to_owned(),
-                value: SettingValueKind::Text(fallback.to_owned()),
-            });
-            if let Some(rbac) = &cfg.rbac {
-                for (name, role) in &rbac.roles {
-                    let app = role
-                        .approval
-                        .map_or_else(|| "default".to_owned(), |a| a.as_str().to_owned());
-                    let summary = format!(
-                        "base={} approval={} allow={} deny={}",
-                        role.base.as_str(),
-                        app,
-                        role.allow.len(),
-                        role.deny.len()
-                    );
-                    out.push(SettingRow {
-                        id: format!("rbac.role.{name}"),
-                        section: "Fallback & Roles",
-                        label: format!("role.{name}"),
-                        description: format!(
-                            "allow=[{}] deny=[{}]",
-                            role.allow.join(","),
-                            role.deny.join(",")
-                        ),
-                        value: SettingValueKind::ReadOnly(summary),
-                    });
-                }
-                for (place, rule) in &rbac.places {
-                    out.push(SettingRow {
-                        id: format!("rbac.place.{}", place.as_str()),
-                        section: "Places & Persons",
-                        label: format!("places.{}", place.as_str()),
-                        description: "Per-place narrowing rule".to_owned(),
-                        value: SettingValueKind::ReadOnly(format!(
-                            "allow=[{}] deny=[{}]",
-                            rule.allow.join(","),
-                            rule.deny.join(",")
+            let rbac = cfg.rbac.as_ref();
+            out.push(row(
+                "rbac.fallback",
+                "Fallback & Roles",
+                "Fallback role",
+                "Role of actors without an assignment (roles.fallback)",
+                sel(rbac.and_then(|r| r.fallback_role.as_deref()).unwrap_or("(none)")),
+            ));
+            if let Some(r) = rbac {
+                for (name, role) in &r.roles {
+                    out.push(row(
+                        &format!("rbac.role.{name}"),
+                        "Fallback & Roles",
+                        &format!("role {name}"),
+                        &format!("allow=[{}] deny=[{}]", role.allow.join(","), role.deny.join(",")),
+                        V::Action(format!(
+                            "base={} approval={} allow={} deny={}",
+                            role.base.as_str(),
+                            role.approval.map_or("inherit", |a| a.as_str()),
+                            role.allow.len(),
+                            role.deny.len()
                         )),
-                    });
+                    ));
                 }
             }
+            out.push(row("rbac.new_role", "Fallback & Roles", "[ + New role ]", "Create a role; [roles.<name>] is written on first edit", V::Action("Create".to_owned())));
             for person in &cfg.persons {
-                out.push(SettingRow {
-                    id: format!("rbac.person.{}", person.actor_id.as_str()),
-                    section: "Places & Persons",
-                    label: format!("person.{}", person.actor_id.as_str()),
-                    description: format!("roles=[{}]", person.roles.join(",")),
-                    value: SettingValueKind::ReadOnly(if person.is_owner {
-                        format!("owner ({} accounts)", person.accounts.len())
-                    } else {
-                        format!("member ({} accounts)", person.accounts.len())
-                    }),
-                });
+                out.push(row(
+                    &format!("rbac.actor.{}", person.actor_id.as_str()),
+                    "Actors",
+                    &format!("actor {}", person.actor_id.as_str()),
+                    "Roles assigned to this actor",
+                    V::Action(format!(
+                        "{}{}",
+                        if person.roles.is_empty() { "(no roles)".to_owned() } else { person.roles.join(", ") },
+                        if person.is_owner { " (owner)" } else { "" }
+                    )),
+                ));
             }
+            out.push(row("rbac.new_actor", "Actors", "[ + Assign roles to an actor ]", "Pick an actor seen in the event log or type an id", V::Action("Add".to_owned())));
+            if let Some(r) = rbac {
+                for (place, rule) in &r.places {
+                    out.push(row(
+                        &format!("rbac.place.{}", place.as_str()),
+                        "Places & Bases",
+                        &format!("place {}", place.as_str()),
+                        "Per-place narrowing: allow / deny capability patterns",
+                        V::Action(format!("allow={} deny={}", rule.allow.len(), rule.deny.len())),
+                    ));
+                }
+            }
+            out.push(row("rbac.new_place", "Places & Bases", "[ + Add place rule ]", "Narrow what is allowed in one place id", V::Action("Add".to_owned())));
+            if let Some(r) = rbac {
+                for (cap, tier) in &r.permission_bases {
+                    out.push(row(
+                        &format!("rbac.base.{cap}"),
+                        "Places & Bases",
+                        &format!("base {cap}"),
+                        "Minimum tier required for this capability",
+                        V::Action(tier.map_or_else(|| "owner-only".to_owned(), |t| t.as_str().to_owned())),
+                    ));
+                }
+            }
+            out.push(row("rbac.new_base", "Places & Bases", "[ + Set permission base ]", "Require a minimum tier (or owner-only) for a capability id", V::Action("Add".to_owned())));
             out
         }
         SettingsTab::Providers => {
-            let mut out = vec![
-                SettingRow {
-                    id: "secrets.model_endpoint".to_owned(),
-                    section: "Endpoint & Key",
-                    label: "model_endpoint".to_owned(),
-                    description: "OpenAI-compatible completions URL (secrets.toml)".to_owned(),
-                    value: SettingValueKind::Text(
-                        secrets
-                            .model_endpoint
-                            .clone()
-                            .unwrap_or_else(|| monoagens_gateway::DEFAULT_OPENAI_ENDPOINT.to_owned()),
-                    ),
-                },
-                SettingRow {
-                    id: "secrets.model_api_key".to_owned(),
-                    section: "Endpoint & Key",
-                    label: "model_api_key".to_owned(),
-                    description: "Stored in secrets.toml (0600, always masked)".to_owned(),
-                    value: SettingValueKind::MaskedSecret {
-                        is_set: secrets.model_api_key_set,
-                    },
-                },
-                SettingRow {
-                    id: "secrets.add_env".to_owned(),
-                    section: "Plugin [env] Secrets",
-                    label: "[ + Add / Update [env] Secret ]".to_owned(),
-                    description: "Write masked secret into secrets.toml [env] (0600)".to_owned(),
-                    value: SettingValueKind::Action("Add Key".to_owned()),
-                },
-            ];
+            let mut out = Vec::new();
+            let (configured, available): (Vec<_>, Vec<_>) =
+                providers.iter().partition(|p| p.keyless || p.key_set);
+            for (group, list) in [("Configured", configured), ("Available", available)] {
+                for p in list {
+                    out.push(row(
+                        &format!("provider.{}", p.id),
+                        "Providers",
+                        &p.label,
+                        &format!("{group}: Enter opens the key / test / use page ({})", p.id),
+                        V::Action(key_status(p)),
+                    ));
+                }
+            }
+            out.extend([
+                row("secrets.model_endpoint", "Legacy Endpoint & Key", "model_endpoint", "OpenAI-compatible completions URL (secrets.toml, legacy providers)", V::Text(secrets.model_endpoint.clone().unwrap_or_else(|| monoagens_gateway::DEFAULT_OPENAI_ENDPOINT.to_owned()))),
+                row("secrets.model_api_key", "Legacy Endpoint & Key", "model_api_key", "Stored in secrets.toml (0600, always masked)", V::MaskedSecret { is_set: secrets.model_api_key_set }),
+                row("secrets.embed_api_key", "Legacy Endpoint & Key", "embed_api_key", "API key of a remote embeddings backend (secrets.toml, masked)", V::MaskedSecret { is_set: secrets.top_level_keys.iter().any(|k| k == "embed_api_key") }),
+                row("secrets.add_env", "Plugin [env] Secrets", "[ + Add / Update [env] Secret ]", "Write masked secret into secrets.toml [env] (0600)", V::Action("Add Key".to_owned())),
+            ]);
             for env_key in &secrets.env_keys {
-                out.push(SettingRow {
-                    id: format!("secrets.env.{env_key}"),
-                    section: "Plugin [env] Secrets",
-                    label: format!("[env] {env_key}"),
-                    description: "Press Enter to rotate, d to unset".to_owned(),
-                    value: SettingValueKind::MaskedSecret { is_set: true },
-                });
+                out.push(row(
+                    &format!("secrets.env.{env_key}"),
+                    "Plugin [env] Secrets",
+                    &format!("[env] {env_key}"),
+                    "Press Enter to rotate, d to unset",
+                    V::MaskedSecret { is_set: true },
+                ));
             }
             out
         }
@@ -817,87 +894,36 @@ pub fn build_settings_rows(
                 let status_label = if !p.installed {
                     "available (press i to install)".to_owned()
                 } else {
-                    format!(
-                        "{} {} (enabled={})",
-                        p.state.dot_glyph(),
-                        p.state.label(),
-                        p.enabled
-                    )
+                    format!("{} {} (enabled={})", p.state.dot_glyph(), p.state.label(), p.enabled)
                 };
-                SettingRow {
-                    id: format!("plugin.{}", p.id),
-                    section: "Configured & Catalog",
-                    label: format!("{} {}", p.id, kind_badge),
-                    description: "Space: Start/Stop · Enter: Details & TOML · i: Install · d: Remove".to_owned(),
-                    value: SettingValueKind::Action(status_label),
-                }
+                row(
+                    &format!("plugin.{}", p.id),
+                    "Configured & Catalog",
+                    &format!("{} {}", p.id, kind_badge),
+                    "Space: Start/Stop · Enter: Details & TOML · i: Install · d: Remove",
+                    V::Action(status_label),
+                )
             })
             .collect(),
-        SettingsTab::Runtime => vec![
-            SettingRow {
-                id: "runtime.hook_timeout_ms".to_owned(),
-                section: "Timeouts & Cues",
-                label: "hook_timeout_ms".to_owned(),
-                description: "Body handshake / hook timeout (ms)".to_owned(),
-                value: SettingValueKind::Number(cfg.runtime.hook_timeout_ms.to_string()),
-            },
-            SettingRow {
-                id: "runtime.action_timeout_ms".to_owned(),
-                section: "Timeouts & Cues",
-                label: "action_timeout_ms".to_owned(),
-                description: "Action execution timeout (ms)".to_owned(),
-                value: SettingValueKind::Number(cfg.runtime.action_timeout_ms.to_string()),
-            },
-            SettingRow {
-                id: "runtime.model_timeout_ms".to_owned(),
-                section: "Timeouts & Cues",
-                label: "model_timeout_ms".to_owned(),
-                description: "Model HTTP request timeout (ms)".to_owned(),
-                value: SettingValueKind::Number(cfg.runtime.model_timeout_ms.to_string()),
-            },
-            SettingRow {
-                id: "runtime.working_cue_ms".to_owned(),
-                section: "Timeouts & Cues",
-                label: "working_cue_ms".to_owned(),
-                description: "Honest R-47 working cue threshold (ms)".to_owned(),
-                value: SettingValueKind::Number(cfg.runtime.working_cue_ms.to_string()),
-            },
-            SettingRow {
-                id: "runtime.progress_note_ms".to_owned(),
-                section: "Timeouts & Cues",
-                label: "progress_note_ms".to_owned(),
-                description: "Honest R-47 progress note threshold (ms)".to_owned(),
-                value: SettingValueKind::Number(cfg.runtime.progress_note_ms.to_string()),
-            },
-            SettingRow {
-                id: "runtime.body_shutdown_grace_ms".to_owned(),
-                section: "Timeouts & Cues",
-                label: "body_shutdown_grace_ms".to_owned(),
-                description: "Grace period when shutting down bodies (ms)".to_owned(),
-                value: SettingValueKind::Number(cfg.runtime.body_shutdown_grace_ms.to_string()),
-            },
-            SettingRow {
-                id: "paths.config".to_owned(),
-                section: "Resolved Paths",
-                label: "monoagens.toml".to_owned(),
-                description: "Active config path".to_owned(),
-                value: SettingValueKind::ReadOnly(paths.config_path.display().to_string()),
-            },
-            SettingRow {
-                id: "paths.secrets".to_owned(),
-                section: "Resolved Paths",
-                label: "secrets.toml".to_owned(),
-                description: "Active secrets path (0600)".to_owned(),
-                value: SettingValueKind::ReadOnly(paths.secrets_path.display().to_string()),
-            },
-            SettingRow {
-                id: "paths.data".to_owned(),
-                section: "Resolved Paths",
-                label: "data_dir".to_owned(),
-                description: "SegmentedStore & tui_chats.json directory".to_owned(),
-                value: SettingValueKind::ReadOnly(paths.data_dir.display().to_string()),
-            },
-        ],
+        SettingsTab::Runtime => {
+            let rt = &cfg.runtime;
+            let n = |v: u64| V::Number(v.to_string());
+            vec![
+                row("runtime.hook_timeout_ms", "Timeouts & Cues", "hook_timeout_ms", "Body handshake / hook timeout (ms)", n(rt.hook_timeout_ms)),
+                row("runtime.action_timeout_ms", "Timeouts & Cues", "action_timeout_ms", "Action execution timeout (ms)", n(rt.action_timeout_ms)),
+                row("runtime.model_timeout_ms", "Timeouts & Cues", "model_timeout_ms", "Model HTTP request timeout (ms)", n(rt.model_timeout_ms)),
+                row("runtime.working_cue_ms", "Timeouts & Cues", "working_cue_ms", "Honest R-47 working cue threshold (ms)", n(rt.working_cue_ms)),
+                row("runtime.progress_note_ms", "Timeouts & Cues", "progress_note_ms", "Honest R-47 progress note threshold (ms)", n(rt.progress_note_ms)),
+                row("runtime.body_shutdown_grace_ms", "Timeouts & Cues", "body_shutdown_grace_ms", "Grace period when shutting down bodies (ms)", n(rt.body_shutdown_grace_ms)),
+                row("identity.link_challenge_ttl_s", "Identity Linking", "link_challenge_ttl_s", "Lifetime of an account-link challenge (seconds)", n(cfg.identity.link_challenge_ttl_s)),
+                row("identity.link_max_attempts", "Identity Linking", "link_max_attempts", "Wrong-code attempts before a link challenge is void", n(u64::from(cfg.identity.link_max_attempts))),
+                row("identity.retroactive_merge", "Identity Linking", "retroactive_merge", "Merge earlier history of linked accounts into one actor", V::Bool(cfg.identity.retroactive_merge)),
+                row("data_dir", "Storage", "data_dir", "Directory of the store, logs and sockets (applies after a restart)", V::Path(cfg.data_dir.as_ref().map_or_else(|| paths.data_dir.display().to_string(), |p| p.display().to_string()))),
+                row("paths.config", "Resolved Paths", "monoagens.toml", "Active config path", V::ReadOnly(paths.config_path.display().to_string())),
+                row("paths.secrets", "Resolved Paths", "secrets.toml", "Active secrets path (0600)", V::ReadOnly(paths.secrets_path.display().to_string())),
+                row("paths.data", "Resolved Paths", "data_dir (resolved)", "SegmentedStore & tui_chats.json directory", V::ReadOnly(paths.data_dir.display().to_string())),
+            ]
+        }
     };
 
     let q = search_query.trim().to_ascii_lowercase();

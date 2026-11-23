@@ -11,6 +11,7 @@ pub mod attachments;
 pub mod clock;
 pub mod commands;
 pub mod config;
+pub mod config_keys;
 pub mod cues;
 pub mod governance;
 pub mod identity;
@@ -60,7 +61,9 @@ pub use lock::{
     acquire_file_lock, acquire_plugin_lock, read_data_dir_lock_pid,
 };
 pub use logging::{DiagnosticRecord, DiagnosticSink, LogLevel};
-pub use owner::{AdminError, GatewayOwner, OwnerMode, OwnerParams, ReloadReport};
+pub use owner::{
+    AdminError, GatewayOwner, OwnerMode, OwnerParams, ReloadReport, apply_config_patch_to_file, write_provider_key,
+};
 pub use plugins::{
     ENV_BODY_STATE_DIR, ENV_PLUGIN_CONFIG, ENV_PLUGIN_STATE_DIR, ENV_RBAC_ENABLED,
     PluginBootPlan, PluginEnvContext, PluginStartupReport, SkippedPlugin, build_plugin_env,
