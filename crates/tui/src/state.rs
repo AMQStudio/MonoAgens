@@ -443,6 +443,10 @@ pub enum AppAction {
     ResetDisplay,
     /// `Ctrl+Z`: leave the alternate screen, stop the process, restore on `SIGCONT`.
     Suspend,
+    /// `/model`, `/login` and `/usage` requests to the gateway (see `catalog_ui`).
+    Catalog(crate::catalog_ui::CatalogAction),
+    /// A governance / observability admin call for the panels in `crate::views`.
+    Gov(crate::views::GovRequest),
 }
 
 /// Result of feeding one terminal event to [`TuiAppState::handle_terminal_event`].
@@ -482,7 +486,8 @@ pub struct TuiAppState {
     pub last_decision_trace: Option<String>,
     pub daily_tokens_used: u64,
     pub daily_token_budget: u64,
-    pub estimated_cost_usd: f64,
+    /// Cost so far in USD; `None` while any price is unknown (then the status bar hides it).
+    pub estimated_cost_usd: Option<f64>,
     pub valve_mode: String,
     pub model_name: String,
     pub gateway_commands: Vec<CommandSpec>,
@@ -493,6 +498,8 @@ pub struct TuiAppState {
     pub secrets_summary: SecretsUiSummary,
     /// `/log` overlay state and received runtime log entries.
     pub log: crate::log::LogView,
+    /// `/model` picker, `/login` and `/usage` overlays plus the provider/model data behind them.
+    pub catalog: crate::catalog_ui::CatalogUi,
     /// Set while the gateway could not boot because of a configuration error.
     pub config_error: Option<ConfigErrorState>,
     /// Set when chat cannot be used although the gateway is reachable (attached while another
@@ -502,6 +509,8 @@ pub struct TuiAppState {
     pub gateway_link: String,
     /// Effects the owner step of the latest finished turn spawned (for `turn.no_reply`).
     pub turn_effects: usize,
+    /// `/approvals`, `/people`, `/policy`, `/activity`, `/events` and `/status` panels.
+    pub gov: crate::views::GovState,
 }
 
 impl TuiAppState {
@@ -572,7 +581,7 @@ impl TuiAppState {
             last_decision_trace: None,
             daily_tokens_used: 0,
             daily_token_budget: gateway_cfg.model.daily_token_budget.max(1),
-            estimated_cost_usd: 0.0,
+            estimated_cost_usd: None,
             valve_mode: gateway_cfg.valve.mode.clone(),
             model_name: gateway_cfg.model.model.clone(),
             gateway_commands: Vec::new(),
@@ -582,10 +591,12 @@ impl TuiAppState {
             gateway_cfg,
             secrets_summary,
             log: crate::log::LogView::default(),
+            catalog: crate::catalog_ui::CatalogUi::default(),
             config_error: None,
             chat_disabled_reason: None,
             gateway_link: String::new(),
             turn_effects: 0,
+            gov: crate::views::GovState::default(),
         };
         app.filter_autocomplete();
         app
@@ -837,7 +848,7 @@ impl TuiAppState {
             SlashCommandItem {
                 name: "model".to_owned(),
                 usage: "/model".to_owned(),
-                description: "Open Model settings".to_owned(),
+                description: format!("Pick provider and model (now {})", self.model_name),
                 current_value: Some(self.model_name.clone()),
                 icon: "◆",
                 lab_only: false,
@@ -928,6 +939,46 @@ impl TuiAppState {
                 current_value: Some(if self.prefs.show_brain_trace { "on" } else { "off" }.to_owned()),
                 icon: "⌘",
                 lab_only: true,
+                from_plugin: None,
+            });
+        }
+
+        cmds.push(SlashCommandItem {
+            name: "login".to_owned(),
+            usage: "/login".to_owned(),
+            description: "Set or change provider API keys".to_owned(),
+            current_value: self.catalog.login_status(self.gateway_cfg.model.catalog_provider.as_deref()),
+            icon: "⚿",
+            lab_only: false,
+            from_plugin: None,
+        });
+        cmds.push(SlashCommandItem {
+            name: "usage".to_owned(),
+            usage: "/usage".to_owned(),
+            description: "Tokens per purpose today and budget left".to_owned(),
+            current_value: Some(format!(
+                "{}/{}",
+                self.daily_tokens_used, self.daily_token_budget
+            )),
+            icon: "Σ",
+            lab_only: false,
+            from_plugin: None,
+        });
+        for (name, description, icon) in [
+            ("approvals", "Pending approvals (grant or deny, including adapter holds)", "⚑"),
+            ("people", "Persons, accounts, roles and account links", "☺"),
+            ("policy", "Read-only valve toggles, absolute lines, Cedar rules and RBAC", "§"),
+            ("activity", "Read-only feed of adapter messages and what the soul did", "≡"),
+            ("events", "Event log with filters, explain and traces", "▤"),
+            ("status", "Gateway owner, data dir, model, plugins, queue and budget", "ℹ"),
+        ] {
+            cmds.push(SlashCommandItem {
+                name: name.to_owned(),
+                usage: format!("/{name}"),
+                description: description.to_owned(),
+                current_value: None,
+                icon,
+                lab_only: false,
                 from_plugin: None,
             });
         }
@@ -1087,6 +1138,10 @@ impl TuiAppState {
     /// imports, and long-text collapse).
     pub fn handle_paste(&mut self, raw: &str) -> Vec<AppAction> {
         self.selection = None;
+        if self.catalog.is_open() {
+            self.catalog.handle_paste(raw);
+            return Vec::new();
+        }
         if let Some(w) = &mut self.wizard {
             if w.step == WizardStep::Step1Provider && w.editing {
                 let cleaned = raw.trim_matches(['\r', '\n']);
@@ -1141,6 +1196,11 @@ impl TuiAppState {
         self.log.view_rows = viewport
             .height
             .saturating_sub(crate::log::LOG_CHROME_ROWS)
+            .max(1) as usize;
+        self.catalog.view_rows = viewport.height.saturating_sub(5).max(1) as usize;
+        self.gov.view_rows = viewport
+            .height
+            .saturating_sub(crate::views::GOV_CHROME_ROWS)
             .max(1) as usize;
         match ev {
             Event::Key(k) => EventOutcome {
@@ -1198,6 +1258,15 @@ impl TuiAppState {
         // The `/log` overlay owns the keyboard while open
         if self.log.open {
             return self.log.handle_key(key);
+        }
+
+        // The `/model`, `/login` and `/usage` overlays own the keyboard while open
+        if self.catalog.is_open() {
+            return self.catalog.handle_key(key);
+        }
+        if self.gov.is_open() {
+            self.gov.lab_mode = self.lab_mode;
+            return self.gov.handle_key(key);
         }
 
         // First-run Setup Wizard intercepts input until completed or skipped
@@ -1607,6 +1676,17 @@ impl TuiAppState {
         self.filter_autocomplete();
     }
 
+    /// Opens a governance panel (with its initial requests).
+    pub fn open_gov(&mut self, panel: crate::views::Panel) -> Vec<AppAction> {
+        self.gov.lab_mode = self.lab_mode;
+        self.gov.status.link = self.gateway_link.clone();
+        if panel == crate::views::Panel::Policy {
+            let toggles = ValveRuleTogglesState::load_from_config(&self.paths.config_path);
+            self.gov.policy.toggles = crate::views::policy::toggle_rows(&toggles);
+        }
+        self.gov.open(panel)
+    }
+
     /// Executes a local TUI slash command or forwards a Gateway/plugin command.
     pub fn execute_slash_command(&mut self, raw: &str) -> Vec<AppAction> {
         let mut parts = raw.split_whitespace();
@@ -1667,6 +1747,12 @@ impl TuiAppState {
                 self.log.open();
                 Vec::new()
             }
+            "/approvals" => self.open_gov(crate::views::Panel::Approvals),
+            "/people" => self.open_gov(crate::views::Panel::People),
+            "/policy" => self.open_gov(crate::views::Panel::Policy),
+            "/activity" => self.open_gov(crate::views::Panel::Activity),
+            "/events" => self.open_gov(crate::views::Panel::Events),
+            "/status" => self.open_gov(crate::views::Panel::Status),
             "/doctor" => vec![AppAction::RunDoctor],
             "/retry" => {
                 if self.config_error.is_some() {
@@ -1681,9 +1767,14 @@ impl TuiAppState {
                 Vec::new()
             }
             "/model" => {
-                self.settings.open_tab(SettingsTab::Model);
-                Vec::new()
+                let provider = self.gateway_cfg.model.catalog_provider.clone();
+                self.catalog.open_picker(provider, self.model_name.clone())
             }
+            "/login" => {
+                let provider = self.gateway_cfg.model.catalog_provider.clone();
+                self.catalog.open_login(provider, self.model_name.clone())
+            }
+            "/usage" => self.catalog.open_usage(),
             "/valve" => {
                 self.settings.open_tab(SettingsTab::Valve);
                 Vec::new()
@@ -1966,10 +2057,27 @@ impl TuiAppState {
         let x = mouse.column;
         let y = mouse.row;
 
+        if self.gov.is_open() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.gov.scroll_by(-3),
+                MouseEventKind::ScrollDown => self.gov.scroll_by(3),
+                _ => {}
+            }
+            return actions;
+        }
+
         if self.log.open {
             match mouse.kind {
                 MouseEventKind::ScrollUp => self.log.scroll_by(-3),
                 MouseEventKind::ScrollDown => self.log.scroll_by(3),
+                _ => {}
+            }
+            return actions;
+        }
+        if self.catalog.is_open() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.catalog.scroll_by(-3),
+                MouseEventKind::ScrollDown => self.catalog.scroll_by(3),
                 _ => {}
             }
             return actions;

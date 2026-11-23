@@ -154,7 +154,7 @@ fn read_http_body(stream: &mut TcpStream) -> String {
 }
 
 #[derive(Clone, Copy)]
-enum MockBodyBehavior {
+pub(crate) enum MockBodyBehavior {
     ImmediateDone,
     CrashMidAction,
     HangPastTimeout,
@@ -162,7 +162,7 @@ enum MockBodyBehavior {
 
 /// Spawns an in-memory Waist-2 NDJSON body over `tokio::io::duplex` implementing real JSON-RPC 2.0
 /// framing (`body/discover`, `action/execute`, optional delayed `action/receipt`).
-fn spawn_ndjson_mock_body(
+pub(crate) fn spawn_ndjson_mock_body(
     handle: &monoagens_gateway::GatewayHandle,
     body_id: &str,
     place_id: &str,
@@ -315,7 +315,7 @@ fn spawn_ndjson_mock_body(
     (body_task, ctrl)
 }
 
-mod mpsc_tx_handle {
+pub(crate) mod mpsc_tx_handle {
     use monoagens_protocol::{
         ActionId, ActionReceiptParams, BodyId, CapabilityId, Percept, PerceptEmitParams, Receipt,
         RpcId, Waist2Headers, Waist2Method, Waist2Request,

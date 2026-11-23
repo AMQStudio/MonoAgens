@@ -3,13 +3,16 @@
 #![forbid(unsafe_code)]
 
 pub mod attachments;
+pub mod catalog_ui;
 pub mod client;
 pub mod clipboard;
 pub mod config;
 pub mod doctor;
 pub mod effects;
 pub mod log;
+pub mod login;
 pub mod markdown;
+pub mod model_picker;
 pub mod render;
 pub mod runtime;
 pub mod settings;
@@ -18,6 +21,8 @@ pub mod theme;
 pub mod titler;
 pub mod width;
 pub mod turn;
+pub mod usage;
+pub mod views;
 
 pub use attachments::{
     FileAttachmentOutcome, MAX_INLINE_DOCUMENT_BYTES, MAX_TUI_PERCEPT_INLINE_BYTES, PasteItem,
@@ -35,6 +40,7 @@ pub use config::{
     IconMode, LocalChatStore, MessageLayout, MotionMode, ShimmerMode, SidebarMode, StoredChatMessagePreview,
     TuiPreferences,
 };
+pub use catalog_ui::{CatalogAction, CatalogEvent, CatalogUi};
 pub use effects::TuiEffects;
 pub use client::{ClientKind, GatewayClient, InProcessClient, RuntimeEvent, SocketClient};
 pub use log::LogView;

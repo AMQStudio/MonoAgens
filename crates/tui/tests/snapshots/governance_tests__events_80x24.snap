@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/governance_tests.rs
+expression: "text_of(&render(w, h, &s))"
+---
+ Events  3/3  place:all source:all kind:all range:all
+22:14:55 #12     speak        wa:dm:alice      soul         action chat.speak
+22:14:54 #11     decision     wa:dm:alice      soul         decision Go for #10
+22:14:53 #10     percept      wa:dm:alice      per_alice    percept
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Enter explain  t trace  T trace id  p place  s source  k kind  w time  x clear

@@ -27,7 +27,7 @@ use monoagens_gateway::{
     DoorController, EmbedBackendKind, GatewayConfig, GatewayOptions, GatewayOwner, GatewayRuntime,
     GatewaySeams, LoadedGatewayEnv, LockError, OwnerMode, OwnerParams, PluginEnvContext,
     PluginSupervisor, ResolvedPaths, RestartPolicy, RunLog, RunLogLevel, SystemClock,
-    ValveDoorController, acquire_data_dir_lock, build_provider_from_config_async,
+    ValveDoorController, acquire_data_dir_lock,
     load_approval_secrets, load_or_init_gateway_env, load_plugin_env_secrets,
     read_data_dir_lock_pid, resolve_approval_mac_key, resolve_paths, resolve_paths_with,
 };
@@ -539,7 +539,14 @@ async fn run_tui_event_loop(
                 }
             }
             maybe_rt = rx.recv() => {
-                if let Some(rt_ev) = maybe_rt {
+                if let Some(RuntimeEvent::Gov(resp)) = maybe_rt {
+                    for a in state.gov.apply(resp) {
+                        if let AppAction::Gov(r) = a {
+                            crate::views::spawn(&client, &tx, r);
+                        }
+                    }
+                    needs_redraw = true;
+                } else if let Some(rt_ev) = maybe_rt {
                     // A reply is routed by the turn that caused its action: bring the log up to
                     // date first so the action is known.
                     if matches!(&rt_ev, RuntimeEvent::AssistantReply { action_id: Some(_), .. })
@@ -559,6 +566,13 @@ async fn run_tui_event_loop(
                 }
             }
             _ = tick_interval.tick() => {
+                if let Some(c) = &client {
+                    state.gov.now_ms = c.now().as_millis();
+                    state.gov.lab_mode = state.lab_mode;
+                    for r in state.gov.due_requests() {
+                        crate::views::spawn(&client, &tx, r);
+                    }
+                }
                 if let Some(toast) = &mut state.toast {
                     toast.ticks_remaining = toast.ticks_remaining.saturating_sub(1);
                     if toast.ticks_remaining == 0 {
@@ -651,6 +665,12 @@ async fn handle_app_action(
                 }
             }
         }
+        AppAction::Catalog(action) => match client.as_ref() {
+            Some(c) => {
+                tokio::spawn(crate::catalog_ui::run_action(action, Arc::clone(c), tx.clone()));
+            }
+            None => state.set_toast("The gateway is not running", true),
+        },
         AppAction::RunDoctor => {
             let input = DoctorInput {
                 paths: state.paths.clone(),
@@ -694,9 +714,8 @@ async fn handle_app_action(
 
             if trigger != TitleTrigger::None
                 && let Some(c) = client.as_ref()
-                && let Some(tp) = c.titler_provider()
+                && let Some((tp, model)) = c.titler_route()
             {
-                let model = state.model_name.clone();
                 let cur_title = if trigger == TitleTrigger::TopicShift {
                     Some(state.chats.active_chat().title.clone())
                 } else {
@@ -764,6 +783,7 @@ async fn handle_app_action(
                 }
             });
         }
+        AppAction::Gov(req) => crate::views::spawn(client, tx, req),
         AppAction::ResolveApproval {
             action_id,
             h_act,
@@ -810,6 +830,8 @@ async fn handle_app_action(
                     }
                 }
             }
+            // The badge and the panel follow the resolution without waiting for the next poll.
+            crate::views::spawn(client, tx, crate::views::approvals::request());
         }
         AppAction::StartPlugin(pid) => {
             if let Some(c) = client.clone() {
@@ -1032,6 +1054,7 @@ fn handle_runtime_event(
                 state.persist_chats();
             }
         }
+        RuntimeEvent::Gov(_) => {}
         RuntimeEvent::Log(entry) => state.on_log_entry(entry),
         RuntimeEvent::Cue(cue) => {
             state.thinking_phase = match cue.kind {
@@ -1048,6 +1071,20 @@ fn handle_runtime_event(
                     is_error: false,
                 },
             );
+        }
+        RuntimeEvent::Catalog(ev) => {
+            if let Some(sel) = state.catalog.apply(ev) {
+                state.model_name = sel.model.clone();
+                state.gateway_cfg.model.model = sel.model;
+                if sel.provider_changed {
+                    state.gateway_cfg.model.provider_base_url = None;
+                }
+                state.gateway_cfg.model.catalog_provider = Some(sel.provider);
+                state.gateway_cfg.model.provider = monoagens_gateway::ModelProviderKind::OpenAiCompatible;
+            }
+            if let Some((text, is_error)) = state.catalog.take_toast() {
+                state.set_toast(text, is_error);
+            }
         }
         RuntimeEvent::OwnerGone => {
             if client.take().is_some() {
@@ -1081,6 +1118,7 @@ async fn poll_new_gateway_events(
     };
     state.daily_tokens_used = page.budget_used;
     state.daily_token_budget = page.budget_limit.max(1);
+    state.estimated_cost_usd = page.cost_usd;
     if page.events.is_empty() {
         follower.seen_len = page.total;
         return;
@@ -1152,10 +1190,12 @@ fn process_event(
             EventDetail::Failure { component, detail, .. } => {
                 state.finish_busy();
                 *active_turn_chat_id = None;
+                let text = crate::catalog_ui::provider_failure_notice(component, detail)
+                    .unwrap_or_else(|| format!("[{component}] {detail}"));
                 state.push_timeline_item(
                     &active_id,
                     ChatTimelineItem::SystemNotice {
-                        text: format!("[{component}] {detail}"),
+                        text,
                         is_error: true,
                     },
                 );
@@ -1230,7 +1270,7 @@ fn format_decision_trace(trace: &DecisionTrace) -> String {
 }
 
 /// Hosts the gateway when this process wins the data-dir lock, otherwise attaches to the holder.
-async fn boot_gateway(
+pub(crate) async fn boot_gateway(
     loaded: &LoadedGatewayEnv,
     options: &TuiLaunchOptions,
     provider_override: Option<Arc<dyn ModelProvider>>,
@@ -1326,13 +1366,6 @@ async fn host_gateway(
         None
     };
 
-    let titler_provider = match &provider_override {
-        Some(p) => Some(Arc::clone(p)),
-        None => build_provider_from_config_async(&cfg, &loaded.secrets)
-            .await
-            .ok(),
-    };
-
     let clock = Arc::new(SystemClock::new());
     let diagnostics = DiagnosticSink::new(&loaded.secrets);
     let runtime = GatewayRuntime::start_segmented_with_configured_core(
@@ -1402,7 +1435,6 @@ async fn host_gateway(
             mac_key,
             clock,
             dynamic_actors,
-            titler_provider,
             embed_sidecar,
         },
         tx,

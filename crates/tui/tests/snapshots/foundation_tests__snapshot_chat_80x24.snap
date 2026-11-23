@@ -21,7 +21,7 @@ expression: "text_of(&render(80, 24, &snapshot_state(&dir)))"
                                                                                │
                                                                                │
                                                                                │
- ● gpt-4o-mini · ◆  Valve: enforcing · $0.00 ── 0% · »  New Chat
+ ● gpt-4o-mini · ◆  Valve: enforcing ── 0% · »  New Chat
 ────────────────────────────────────────────────────────────────────────────────
  >  Message Mono or type / for commands…
 ────────────────────────────────────────────────────────────────────────────────

@@ -95,7 +95,7 @@ fn tui_failed_turn_ends_busy_and_reports_the_error() {
     s.send_keys("hello there\r");
     s.wait_for_text("hello there", Duration::from_secs(5));
     // The scripted provider has no reply queued, so the model call fails; busy must still end.
-    s.wait_for_text("model call failed", Duration::from_secs(12));
+    s.wait_for_text("Model call failed", Duration::from_secs(12));
     s.wait_for_text("esc to clear", Duration::from_secs(5)); // idle hint is back
     s.send_keys("/quit\r");
     assert_eq!(s.wait_exit(Duration::from_secs(10)), Some(0));

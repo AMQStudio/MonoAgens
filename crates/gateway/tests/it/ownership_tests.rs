@@ -287,6 +287,46 @@ async fn admin_socket_is_0600_replaces_stale_socket_and_answers_status_and_unkno
     booted.rt.shutdown().await;
 }
 
+#[test]
+fn admin_socket_path_falls_back_to_the_runtime_dir_for_long_data_dirs() {
+    use monoagens_gateway::admin_socket_path_in;
+    let runtime = Path::new("/run/user/1000");
+    let short = Path::new("/home/u/data");
+    assert_eq!(admin_socket_path_in(short, Some(runtime)), short.join("gateway.sock"));
+    let long = PathBuf::from(format!("/home/u/{}", "d".repeat(120)));
+    let a = admin_socket_path_in(&long, Some(runtime));
+    assert_eq!(a.parent(), Some(runtime));
+    assert!(a.as_os_str().len() <= 107, "{}", a.display());
+    assert_eq!(a, admin_socket_path_in(&long, Some(runtime)), "deterministic");
+    let other = PathBuf::from(format!("/home/u/{}", "e".repeat(120)));
+    assert_ne!(a, admin_socket_path_in(&other, Some(runtime)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_socket_works_with_a_data_dir_longer_than_the_unix_socket_limit() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = test_dir();
+    let long = base.path().join("x".repeat(60)).join("y".repeat(60)).join("data");
+    std::fs::create_dir_all(&long).unwrap();
+    let primary = long.join("gateway.sock");
+    assert!(primary.as_os_str().len() > 107, "the data dir must be too long");
+    let sock = monoagens_gateway::admin_socket_path(&long);
+    if sock == primary {
+        eprintln!("no runtime dir in this environment: skipping");
+        return;
+    }
+    let (booted, owner, _sup, _log, lock) = start_owner(&long, vec![], None).await;
+    let server = AdminServer::start(&lock, &long, owner).await.expect("serve");
+    assert_eq!(server.path(), sock.as_path());
+    assert_eq!(std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777, 0o600);
+    let mut client = AdminClient::connect(&long).await.expect("attach finds the fallback socket");
+    let status = client.call("status", Value::Null).await.expect("status");
+    assert_eq!(status["socket"], json!(sock.display().to_string()));
+    server.shutdown();
+    assert!(!sock.exists());
+    booted.rt.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plugins_restart_through_the_socket_gives_a_new_pid_and_logs_stream() {
     let dir = test_dir();

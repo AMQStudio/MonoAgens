@@ -86,6 +86,10 @@ pub enum RuntimeEvent {
     Cue(LifecycleCueEvent),
     /// The gateway owner went away (socket closed).
     OwnerGone,
+    /// Result of a `/model`, `/login` or `/usage` request.
+    Catalog(crate::catalog_ui::CatalogEvent),
+    /// Result of a governance / observability admin call (`crate::views`).
+    Gov(crate::views::GovResponse),
 }
 
 /// Page of the owner's event log.
@@ -97,6 +101,8 @@ pub struct EventsPage {
     pub events: Vec<EventRecord>,
     pub budget_used: u64,
     pub budget_limit: u64,
+    /// Cost so far in USD; `None` while any price is unknown (the status bar hides it).
+    pub cost_usd: Option<f64>,
 }
 
 /// Outcome of a gateway slash command.
@@ -124,8 +130,9 @@ pub trait GatewayClient: Send + Sync {
     fn now(&self) -> Time;
     /// Key used to sign out-of-band approval resolutions.
     fn approval_mac_key(&self) -> [u8; 32];
-    /// Provider for the background chat titler (`None` when attached).
-    fn titler_provider(&self) -> Option<Arc<dyn ModelProvider>>;
+    /// Provider and model name for the background chat titler: the classify purpose's route,
+    /// swapped live by `config.apply` (`None` when attached).
+    fn titler_route(&self) -> Option<(Arc<dyn ModelProvider>, String)>;
     /// Makes simulated (lab) actors known to the valve; a no-op when attached.
     fn register_actors(&self, actors: &[ActorId]);
     /// Why the chat body is unavailable (attached while another TUI owns the terminal place).
@@ -136,6 +143,16 @@ pub trait GatewayClient: Send + Sync {
     fn status(&self) -> Fut<'_, ClientResult<Value>>;
     fn config_get(&self) -> Fut<'_, ClientResult<Value>>;
     fn config_apply(&self, patch: Value) -> Fut<'_, ClientResult<Value>>;
+    /// `providers.list`: catalog providers with key state (never key material).
+    fn providers_list(&self) -> Fut<'_, ClientResult<Value>>;
+    /// `models.discover`: the cached list (`refresh = false`, instant) or a fresh one.
+    fn models_discover(&self, provider: String, refresh: bool) -> Fut<'_, ClientResult<Value>>;
+    /// `providers.test`: connection test with `api_key` (or the stored key); saves nothing.
+    fn providers_test(&self, provider: String, api_key: Option<String>) -> Fut<'_, ClientResult<Value>>;
+    /// `secrets.set`: stores a provider key in `secrets.toml` (write-only).
+    fn secrets_set(&self, provider: String, api_key: String) -> Fut<'_, ClientResult<Value>>;
+    /// `usage.get`: tokens per purpose today, budget left and cost when priced.
+    fn usage_get(&self) -> Fut<'_, ClientResult<Value>>;
     fn plugins_list(&self) -> Fut<'_, ClientResult<Vec<PluginInfo>>>;
     fn plugins_start(&self, id: String) -> Fut<'_, ClientResult<()>>;
     fn plugins_stop(&self, id: String) -> Fut<'_, ClientResult<()>>;
@@ -154,6 +171,15 @@ pub trait GatewayClient: Send + Sync {
     ) -> Fut<'_, ClientResult<CommandReply>>;
     /// Stops what this client owns (hosting: plugins, socket, gateway; attached: the connection).
     fn shutdown(&self) -> Fut<'_, ()>;
+    /// Governance and observability admin methods (`approvals.list`, `people.list`, `links.*`,
+    /// `policy.get`, `events.*`, `activity.list`, `lab.*`) and `status`: the same JSON over the
+    /// socket or in process. Clients that cannot reach a gateway answer an error.
+    fn gov_call(&self, method: String, params: Value) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            let _ = params;
+            Err(ClientError::server(format!("{method}: not supported by this client")))
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -168,6 +194,7 @@ fn decode_events_page(v: &Value) -> ClientResult<EventsPage> {
         events,
         budget_used: v.pointer("/budget/used").and_then(Value::as_u64).unwrap_or(0),
         budget_limit: v.pointer("/budget/limit").and_then(Value::as_u64).unwrap_or(0),
+        cost_usd: v.pointer("/budget/cost_usd").and_then(Value::as_f64),
     })
 }
 
@@ -422,7 +449,6 @@ pub struct InProcessParts {
     pub mac_key: [u8; 32],
     pub clock: Arc<SystemClock>,
     pub dynamic_actors: Arc<Mutex<BTreeSet<ActorId>>>,
-    pub titler_provider: Option<Arc<dyn ModelProvider>>,
     pub embed_sidecar: Option<LocalEmbedSidecar>,
 }
 
@@ -437,7 +463,6 @@ pub struct InProcessClient {
     mac_key: [u8; 32],
     clock: Arc<SystemClock>,
     dynamic_actors: Arc<Mutex<BTreeSet<ActorId>>>,
-    titler_provider: Option<Arc<dyn ModelProvider>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     _embed_sidecar: Option<LocalEmbedSidecar>,
 }
@@ -516,7 +541,6 @@ impl InProcessClient {
             mac_key: parts.mac_key,
             clock: parts.clock,
             dynamic_actors: parts.dynamic_actors,
-            titler_provider: parts.titler_provider,
             tasks: Mutex::new(tasks),
             _embed_sidecar: parts.embed_sidecar,
         })
@@ -552,8 +576,8 @@ impl GatewayClient for InProcessClient {
         self.mac_key
     }
 
-    fn titler_provider(&self) -> Option<Arc<dyn ModelProvider>> {
-        self.titler_provider.clone()
+    fn titler_route(&self) -> Option<(Arc<dyn ModelProvider>, String)> {
+        Some(self.handle.live_model().route_for(monoagens_core::ModelPurpose::Classify))
     }
 
     fn register_actors(&self, actors: &[ActorId]) {
@@ -584,6 +608,26 @@ impl GatewayClient for InProcessClient {
             let report = self.owner.config_apply(&patch).await?;
             Ok(json!({ "ok": true, "reloaded": report }))
         })
+    }
+
+    fn providers_list(&self) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.owner.providers_list() })
+    }
+
+    fn models_discover(&self, provider: String, refresh: bool) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.owner.models_discover(&provider, refresh).await })
+    }
+
+    fn providers_test(&self, provider: String, api_key: Option<String>) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.owner.providers_test(&provider, api_key.as_deref()).await })
+    }
+
+    fn secrets_set(&self, provider: String, api_key: String) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.owner.secrets_set(&provider, &api_key).await })
+    }
+
+    fn usage_get(&self) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { Ok(self.owner.usage_get()) })
     }
 
     fn plugins_list(&self) -> Fut<'_, ClientResult<Vec<PluginInfo>>> {
@@ -644,6 +688,15 @@ impl GatewayClient for InProcessClient {
                 actor.as_deref(),
                 place.as_deref(),
             )))
+        })
+    }
+
+    fn gov_call(&self, method: String, params: Value) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            if method == "status" {
+                return Ok(self.owner.status());
+            }
+            monoagens_gateway::governance::governance_call(&self.owner, &method, &params).await
         })
     }
 
@@ -880,7 +933,7 @@ impl GatewayClient for SocketClient {
         self.mac_key
     }
 
-    fn titler_provider(&self) -> Option<Arc<dyn ModelProvider>> {
+    fn titler_route(&self) -> Option<(Arc<dyn ModelProvider>, String)> {
         None
     }
 
@@ -904,6 +957,35 @@ impl GatewayClient for SocketClient {
 
     fn config_apply(&self, patch: Value) -> Fut<'_, ClientResult<Value>> {
         Box::pin(async move { self.call("config.apply", json!({ "patch": patch })).await })
+    }
+
+    fn providers_list(&self) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.call("providers.list", json!({})).await })
+    }
+
+    fn models_discover(&self, provider: String, refresh: bool) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            self.call("models.discover", json!({ "provider": provider, "refresh": refresh }))
+                .await
+        })
+    }
+
+    fn providers_test(&self, provider: String, api_key: Option<String>) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            self.call("providers.test", json!({ "provider": provider, "api_key": api_key }))
+                .await
+        })
+    }
+
+    fn secrets_set(&self, provider: String, api_key: String) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            self.call("secrets.set", json!({ "provider": provider, "api_key": api_key }))
+                .await
+        })
+    }
+
+    fn usage_get(&self) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.call("usage.get", json!({})).await })
     }
 
     fn plugins_list(&self) -> Fut<'_, ClientResult<Vec<PluginInfo>>> {
@@ -975,6 +1057,10 @@ impl GatewayClient for SocketClient {
                     .await?,
             ))
         })
+    }
+
+    fn gov_call(&self, method: String, params: Value) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.call(&method, params).await })
     }
 
     fn shutdown(&self) -> Fut<'_, ()> {

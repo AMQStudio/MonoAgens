@@ -128,7 +128,7 @@ fn bad_config_opens_the_tui_with_a_banner_and_retry_boots_the_gateway() {
     s.send_keys("/retry\r");
     s.wait_for_absent("Configuration error", Duration::from_secs(15));
     s.send_keys("hello again\r");
-    s.wait_for_text("model call failed", Duration::from_secs(15));
+    s.wait_for_text("Model call failed", Duration::from_secs(15));
     quit(s);
 }
 

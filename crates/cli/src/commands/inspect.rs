@@ -3,48 +3,18 @@ use std::io::Write;
 use std::path::Path;
 
 use monoagens_conformance::{run_body_conformance, run_core_conformance};
-use monoagens_core::{
-    DecisionOutcome, DecisionTrace, EventDetail, EventKind, EventRecord, MemStore, ReplayMode,
-    Store,
+use monoagens_core::{EventRecord, ReplayMode, Store};
+use monoagens_gateway::governance::{
+    EventFilter, JobCtl, explain_decision, filter_events, inspector_trace_events,
+    parse_event_kind, policy_report, replay_events,
 };
-use monoagens_protocol::EventId;
 use monoagens_store::{SegmentedStore, StoreConfig};
-use monoagens_valve::{DEFAULT_CEDAR_POLICIES, PolicyBundle, ValveReasonTag};
-use serde::Serialize;
 use serde_json::json;
 
-use crate::common::{build_valve_config, load_paths, open_store_readonly, write_json_pretty};
+use crate::common::{load_paths, open_store_readonly, write_json_pretty};
 use crate::{
     ConformanceArgs, ConformanceSubcommand, InspectorArgs, LogArgs, ReplayArgs, ReplayModeArg,
 };
-
-#[derive(Debug, Serialize)]
-struct ExplainDecisionPayload<'a> {
-    event_id: u64,
-    seq: u64,
-    target_event_id: u64,
-    outcome: DecisionOutcome,
-    salience: f64,
-    threshold: f64,
-    probability: f64,
-    draw: f64,
-    reason: Option<monoagens_core::DecisionReason>,
-    trace: Option<&'a DecisionTrace>,
-    door_verdicts: Vec<DoorVerdictSummary>,
-}
-
-#[derive(Debug, Serialize)]
-struct DoorVerdictSummary {
-    event_id: u64,
-    seq: u64,
-    door: String,
-    rule: String,
-    reason_tag: String,
-}
-
-fn parse_event_kind(raw: &str) -> Option<EventKind> {
-    EventKind::ALL.into_iter().find(|k| k.as_str() == raw)
-}
 
 pub(crate) fn cmd_log(
     config_path: Option<&Path>,
@@ -68,24 +38,14 @@ pub(crate) fn cmd_log(
         .map(|k| parse_event_kind(k).ok_or_else(|| format!("unknown event kind '{k}'")))
         .transpose()?;
 
-    let filtered: Vec<&EventRecord> = events
-        .iter()
-        .filter(|ev| args.place.as_deref().is_none_or(|p| ev.place.as_str() == p))
-        .filter(|ev| {
-            args.source
-                .as_deref()
-                .is_none_or(|s| ev.actor.as_str() == s)
-        })
-        .filter(|ev| kind_filter.is_none_or(|k| ev.kind == k))
-        .filter(|ev| {
-            args.since
-                .is_none_or(|min_ms| ev.timestamp_ms.as_millis() >= min_ms)
-        })
-        .filter(|ev| {
-            args.until
-                .is_none_or(|max_ms| ev.timestamp_ms.as_millis() <= max_ms)
-        })
-        .collect();
+    let filter = EventFilter {
+        place: args.place.clone(),
+        source: args.source.clone(),
+        kind: kind_filter,
+        since_ms: args.since,
+        until_ms: args.until,
+    };
+    let filtered = filter_events(&events, &filter);
 
     if json_mode {
         let rows: Vec<serde_json::Value> = filtered
@@ -127,105 +87,12 @@ fn render_explain_event(
     json_mode: bool,
     out: &mut dyn Write,
 ) -> Result<u8, String> {
-    let target = EventId::new(query_id);
-    let decision_ev = events
-        .iter()
-        .find(|ev| ev.id == target && matches!(ev.detail, Some(EventDetail::Decision { .. })))
-        .or_else(|| {
-            events.iter().find(|ev| {
-                matches!(
-                    ev.detail,
-                    Some(EventDetail::Decision { target_event_id, .. }) if target_event_id == target
-                )
-            })
-        })
-        .ok_or_else(|| format!("no decision event found for event id {query_id}"))?;
-
-    let Some(EventDetail::Decision {
-        target_event_id,
-        outcome,
-        salience,
-        threshold,
-        probability,
-        draw,
-        reason,
-        trace,
-    }) = &decision_ev.detail
-    else {
-        return Err(format!("event {query_id} is not a decision event"));
-    };
-
-    let door_verdicts: Vec<DoorVerdictSummary> = events
-        .iter()
-        .filter_map(|ev| match &ev.detail {
-            Some(EventDetail::DoorVerdict {
-                door,
-                target_event_id: dv_target,
-                rule,
-                verdict,
-            }) if *dv_target == Some(*target_event_id) || *dv_target == Some(decision_ev.id) => {
-                Some(DoorVerdictSummary {
-                    event_id: ev.id.as_u64(),
-                    seq: ev.seq.as_u64(),
-                    door: format!("{door:?}").to_lowercase(),
-                    rule: rule.clone(),
-                    reason_tag: verdict.clone(),
-                })
-            }
-            _ => None,
-        })
-        .collect();
-
+    let explained = explain_decision(events, query_id)?;
     if json_mode {
-        let payload = ExplainDecisionPayload {
-            event_id: decision_ev.id.as_u64(),
-            seq: decision_ev.seq.as_u64(),
-            target_event_id: target_event_id.as_u64(),
-            outcome: *outcome,
-            salience: *salience,
-            threshold: *threshold,
-            probability: *probability,
-            draw: *draw,
-            reason: *reason,
-            trace: trace.as_deref(),
-            door_verdicts,
-        };
-        write_json_pretty(out, &payload)?;
+        write_json_pretty(out, &explained)?;
     } else {
-        writeln!(
-            out,
-            "decision event={} target={} outcome={:?} salience={:.6} threshold={:.6} probability={:.6} draw={:.6} reason={:?}",
-            decision_ev.id.as_u64(),
-            target_event_id.as_u64(),
-            outcome,
-            salience,
-            threshold,
-            probability,
-            draw,
-            reason
-        )
-        .map_err(|e| e.to_string())?;
-        if let Some(t) = trace {
-            writeln!(
-                out,
-                "  schema_v={} online_adapt={} commitment_bypass={} cic_abstain={} wait_delta_ms={} gate_probs={:?} gate_logits={:?}",
-                t.feature_schema_version,
-                t.online_adaptation_applied,
-                t.commitment_bypass,
-                t.neural.cic_abstain,
-                t.neural.wait_delta_ms,
-                t.neural.gate_probs,
-                t.neural.gate_logits,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        for dv in &door_verdicts {
-            writeln!(
-                out,
-                "  door_verdict door={} rule={} reason_tag={}",
-                dv.door, dv.rule, dv.reason_tag
-            )
-            .map_err(|e| e.to_string())?;
+        for line in explained.text_lines() {
+            writeln!(out, "{line}").map_err(|e| e.to_string())?;
         }
     }
     Ok(0)
@@ -261,52 +128,22 @@ pub(crate) fn cmd_replay(
         ReplayModeArg::Unpinned => ReplayMode::Unpinned,
     };
 
-    let mut mem = MemStore::new();
-    for rec in &events {
-        mem.append(rec.clone())
-            .map_err(|e| format!("offline replay store build failed: {e}"))?;
-    }
-    let report = monoagens_core::replay_log(&mem, mode, None)
-        .map_err(|e| format!("offline replay failed: {e}"))?;
+    let summary = replay_events(&events, mode, &JobCtl::none())?;
 
-    if report.is_exact() {
-        if json_mode {
-            let payload = json!({
-                "status": "ok",
-                "message": "all decisions reproduced",
-                "replayed_events": report.recovery.replayed_events,
-                "matched_decisions": report.verified_decisions,
-                "first_divergence": serde_json::Value::Null,
-            });
-            write_json_pretty(out, &payload)?;
-        } else {
-            writeln!(
-                out,
-                "all decisions reproduced (matched={}, replayed={})",
-                report.verified_decisions, report.recovery.replayed_events
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(0)
-    } else {
-        let div = report.mismatches.first().expect("mismatch present");
+    if let Some(div) = &summary.first_divergence {
         let div_msg = format!(
             "replay divergence at seq={} decision_event={} target_event={} field={}: {}",
-            div.seq.as_u64(),
-            div.event_id.as_u64(),
-            div.target_event_id.as_u64(),
-            div.field,
-            div.detail
+            div.seq, div.decision_event_id, div.target_event_id, div.field, div.detail
         );
         if json_mode {
             let payload = json!({
                 "status": "diverged",
-                "replayed_events": report.recovery.replayed_events,
-                "matched_decisions": report.verified_decisions,
+                "replayed_events": summary.replayed_events,
+                "matched_decisions": summary.matched_decisions,
                 "first_divergence": {
-                    "seq": div.seq.as_u64(),
-                    "decision_event_id": div.event_id.as_u64(),
-                    "target_event_id": div.target_event_id.as_u64(),
+                    "seq": div.seq,
+                    "decision_event_id": div.decision_event_id,
+                    "target_event_id": div.target_event_id,
                     "field": div.field,
                     "detail": div.detail,
                 },
@@ -315,6 +152,25 @@ pub(crate) fn cmd_replay(
         }
         let _ = writeln!(err, "error: {div_msg}");
         Ok(1)
+    } else {
+        if json_mode {
+            let payload = json!({
+                "status": "ok",
+                "message": "all decisions reproduced",
+                "replayed_events": summary.replayed_events,
+                "matched_decisions": summary.matched_decisions,
+                "first_divergence": serde_json::Value::Null,
+            });
+            write_json_pretty(out, &payload)?;
+        } else {
+            writeln!(
+                out,
+                "all decisions reproduced (matched={}, replayed={})",
+                summary.matched_decisions, summary.replayed_events
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(0)
     }
 }
 
@@ -355,24 +211,6 @@ pub(crate) fn cmd_conformance(args: ConformanceArgs, out: &mut dyn Write) -> Res
     Ok(if report.passed() { 0 } else { 1 })
 }
 
-fn extract_cedar_rule_summaries(policy_src: &str) -> Vec<String> {
-    let mut rules = Vec::new();
-    let mut idx = 0usize;
-    for raw_line in policy_src.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed.starts_with("permit(") || trimmed.starts_with("forbid(") {
-            idx += 1;
-            let kind = if trimmed.starts_with("permit") {
-                "permit"
-            } else {
-                "forbid"
-            };
-            rules.push(format!("default_cedar_rule_{idx:02}_{kind}"));
-        }
-    }
-    rules
-}
-
 pub(crate) fn cmd_inspector(
     config_path: Option<&Path>,
     json_mode: bool,
@@ -381,50 +219,30 @@ pub(crate) fn cmd_inspector(
 ) -> Result<u8, String> {
     let (cfg_opt, paths) = load_paths(config_path)?;
     let cfg = cfg_opt.unwrap_or_default();
-    let valve_cfg = build_valve_config(&cfg);
-    let bundle = PolicyBundle::default_verified()
-        .map_err(|e| format!("cedar policy verification failed: {e}"))?;
-    let proof = bundle.proof_report().clone();
-    let rules = extract_cedar_rule_summaries(DEFAULT_CEDAR_POLICIES);
-    let reason_tags: Vec<&'static str> = ValveReasonTag::ALL.iter().map(|t| t.as_str()).collect();
+    let report = policy_report(&cfg)?;
 
     let mut trace_events = Vec::new();
     if paths.data_dir.exists()
         && let Ok(store) = SegmentedStore::open(StoreConfig::new(paths.data_dir.clone()))
         && let Ok(events) = store.read_in_order(None, usize::MAX)
     {
-        for ev in events {
-            let is_relevant = matches!(
-                ev.detail,
-                Some(
-                    EventDetail::DoorVerdict { .. }
-                        | EventDetail::Action { .. }
-                        | EventDetail::Receipt { .. }
-                )
-            );
-            if !is_relevant {
-                continue;
-            }
-            let tp_match = args
-                .traceparent
-                .as_deref()
-                .is_none_or(|tp| serde_json::to_string(&ev).is_ok_and(|s| s.contains(tp)));
-            if tp_match {
-                trace_events.push(json!({
-                    "id": ev.id.as_u64(),
-                    "seq": ev.seq.as_u64(),
-                    "kind": ev.kind.as_str(),
-                    "timestamp_ms": ev.timestamp_ms.as_millis(),
-                }));
-            }
+        for row in inspector_trace_events(&events, args.traceparent.as_deref()) {
+            trace_events.push(json!({
+                "id": row.id,
+                "seq": row.seq,
+                "kind": row.kind,
+                "timestamp_ms": row.timestamp_ms,
+            }));
         }
     }
 
+    let proof = &report.symcc_proof;
+    let rules = &report.active_rule_names;
     let payload = json!({
-        "valve_mode": valve_cfg.mode.as_str(),
+        "valve_mode": report.valve_mode,
         "symcc_proof": proof,
         "active_rule_names": rules,
-        "canonical_reason_tags": reason_tags,
+        "canonical_reason_tags": report.canonical_reason_tags,
         "traceparent_filter": args.traceparent,
         "traces": trace_events,
     });
@@ -435,13 +253,13 @@ pub(crate) fn cmd_inspector(
         writeln!(
             out,
             "valve_mode={} symcc_status={:?} solver={} counterexamples={}",
-            valve_cfg.mode.as_str(),
+            report.valve_mode,
             proof.status,
             proof.solver,
             proof.counterexamples
         )
         .map_err(|e| e.to_string())?;
-        for r in &rules {
+        for r in rules {
             writeln!(out, "  rule: {r}").map_err(|e| e.to_string())?;
         }
         writeln!(out, "  traces: {}", trace_events.len()).map_err(|e| e.to_string())?;

@@ -12,6 +12,7 @@ pub mod clock;
 pub mod commands;
 pub mod config;
 pub mod cues;
+pub mod governance;
 pub mod identity;
 pub mod lock;
 pub mod logging;
@@ -26,7 +27,7 @@ pub mod secrets;
 pub mod supervisor;
 pub mod waist2;
 
-pub use admin::{ADMIN_SOCKET_FILENAME, AdminClient, AdminServer, admin_socket_path};
+pub use admin::{ADMIN_SOCKET_FILENAME, AdminClient, AdminServer, admin_socket_path, admin_socket_path_in};
 pub use attachments::{
     AttachmentCustodyError, AttachmentMasterKey, AttachmentStore, DEFAULT_CUSTODY_TTL_MS,
     GatewayAttachmentBridge, HardForgetAttachmentReport, STAGING_TTL_MS,
@@ -37,7 +38,7 @@ pub use commands::{CommandOutcome, CommandRegistry, CommandSpec};
 pub use config::{
     BodyPluginConfig, BodyTransportConfig, CONFIG_FILENAME, CURRENT_CONFIG_VERSION, ConfigError,
     DEFAULT_OPENAI_ENDPOINT, EmbedBackendKind, EmbedConfig, GatewayConfig, IdentityConfig,
-    LoadedGatewayEnv, ModelConfig, ModelProviderKind, PersonAccountConfig, PersonMappingConfig,
+    LoadedGatewayEnv, ModelConfig, ModelPrice, ModelProviderKind, PurposeModelConfig, PersonAccountConfig, PersonMappingConfig,
     PluginConfig, PluginKind, ResolvedPaths, RuntimeConfig, SECRETS_FILENAME, SoulConfig,
     ValveSectionConfig, default_config_document, extract_cli_config_arg, load_config_file,
     load_or_init_gateway_env, parse_config_str, resolve_paths, resolve_paths_with,
@@ -69,8 +70,9 @@ pub use prequeue::{
     ToolRagQueryResult, build_embedder_from_config, build_embedder_from_config_async,
 };
 pub use provider::{
-    CANCELLED_BY_OWNER, DailyBudgetTracker, GatewayModelExecutor, ProviderInitError, TurnRegistry, build_provider_from_config,
-    build_provider_from_config_async,
+    CANCELLED_BY_OWNER, DailyBudgetTracker, GatewayModelExecutor, LiveModel, ModelRoutes,
+    ProviderInitError, TurnRegistry, UsageCounts, UsageRow, build_model_routes, build_model_routes_async,
+    build_provider_from_config, build_provider_from_config_async, purpose_from_name, purpose_name,
 };
 pub use runlog::{
     LogBuffer, LogEntry, LogLevel as RunLogLevel, RunLog, RotatingLogFile,

@@ -8,7 +8,11 @@
 //! Methods: `status`, `config.get`, `config.apply`, `plugins.list`, `plugins.start`,
 //! `plugins.stop`, `plugins.restart`, `plugins.subscribe`, `logs.subscribe`, `cues.subscribe`,
 //! `turn.submit` (text, or a full client-built `percept`), `turn.cancel`, `events.since`,
-//! `commands.list`, `commands.run`, `approvals.resolve` and `body.attach`. `body.attach` turns
+//! `commands.list`, `commands.run`, `approvals.resolve`, `providers.list`, `models.discover`,
+//! `providers.test`, `secrets.set` (write-only: the key is never echoed), `usage.get` and `body.attach`,
+//! plus the governance methods of `crate::governance` (`approvals.list`, `people.list`, `links.*`,
+//! `policy.get`, `events.query/explain/trace`, `activity.list`, `activity.subscribe`, `lab.*`).
+//! `body.attach` turns
 //! the connection itself into a Waist-2 body stream (the attached TUI's chat body); it is
 //! refused while another body already owns the requested id or places. Anything else answers
 //! `-32601`.
@@ -37,10 +41,41 @@ const MAX_LINE_BYTES: u64 = 4 * 1024 * 1024;
 const ERR_PARSE: i32 = -32700;
 const ERR_INVALID_REQUEST: i32 = -32600;
 
-/// Returns `<data_dir>/gateway.sock`.
+/// Longest socket path a unix socket address can hold (`sun_path` is 108 bytes incl. the NUL).
+const MAX_SOCKET_PATH_BYTES: usize = 107;
+
+/// Returns the admin socket path of `data_dir`: `<data_dir>/gateway.sock`, or, when that would
+/// exceed the unix socket path limit, `<runtime dir>/monoagens-<hash of data_dir>.sock`
+/// (`$XDG_RUNTIME_DIR`, else `/run/user/<uid>`; never `/tmp`). The choice is a pure function of
+/// the data dir and the environment, so the owner and every attaching client agree on it; the
+/// owner reports the actual path as `socket` in `status`.
 #[must_use]
 pub fn admin_socket_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(ADMIN_SOCKET_FILENAME)
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            use std::os::unix::fs::MetadataExt;
+            let uid = std::fs::metadata("/proc/self").ok()?.uid();
+            let dir = PathBuf::from(format!("/run/user/{uid}"));
+            dir.is_dir().then_some(dir)
+        });
+    admin_socket_path_in(data_dir, runtime.as_deref())
+}
+
+/// [`admin_socket_path`] with an explicit runtime directory.
+#[must_use]
+pub fn admin_socket_path_in(data_dir: &Path, runtime_dir: Option<&Path>) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    let primary = data_dir.join(ADMIN_SOCKET_FILENAME);
+    if primary.as_os_str().as_bytes().len() <= MAX_SOCKET_PATH_BYTES {
+        return primary;
+    }
+    let Some(runtime_dir) = runtime_dir else {
+        return primary;
+    };
+    let hash = blake3::hash(data_dir.as_os_str().as_bytes()).to_hex();
+    runtime_dir.join(format!("monoagens-{}.sock", &hash.as_str()[..16]))
 }
 
 /// Running admin socket server. Dropping it (or [`AdminServer::shutdown`]) removes the socket.
@@ -60,7 +95,10 @@ impl AdminServer {
         let path = admin_socket_path(data_dir);
         // Bind under a private temporary name, chmod, then rename into place so the final
         // path never exists with looser permissions.
-        let tmp = data_dir.join(format!("{ADMIN_SOCKET_FILENAME}.{}.tmp", std::process::id()));
+        let tmp = path
+            .parent()
+            .unwrap_or(data_dir)
+            .join(format!(".gw{}", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let listener = UnixListener::bind(&tmp)?;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
@@ -329,6 +367,40 @@ async fn handle_request(
         return;
     }
 
+    if method == "activity.subscribe" {
+        // Rows are derived from the recorded events (nothing is kept in memory across
+        // restarts): remember what exists now, then push every row that is new or whose
+        // outcome changed, polling the log once a second while the subscriber is connected.
+        let mut sent: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+        if let Ok(events) = owner.handle().read_events().await {
+            for r in crate::governance::activity_rows(&events) {
+                sent.insert(r.trace, r.outcome.as_str().to_owned());
+            }
+        }
+        let sub = sub_ids.fetch_add(1, Ordering::Relaxed);
+        if id.is_some() {
+            let _ = out.send(ok_line(&respond_id, json!({ "subscription": sub })));
+        }
+        let mut tick = tokio::time::interval(Duration::from_millis(1000));
+        loop {
+            tokio::select! {
+                () = out.closed() => break,
+                _ = tick.tick() => {
+                    let Ok(events) = owner.handle().read_events().await else { break };
+                    for r in crate::governance::activity_rows(&events) {
+                        if sent.get(&r.trace).is_none_or(|o| o != r.outcome.as_str()) {
+                            sent.insert(r.trace, r.outcome.as_str().to_owned());
+                            if out.send(notification("activity.row", &r)).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     let result = dispatch(&owner, method, &params).await;
     if id.is_none() {
         return; // JSON-RPC notification: no response.
@@ -408,6 +480,32 @@ async fn dispatch(owner: &GatewayOwner, method: &str, params: &Value) -> Result<
                 .await
         }
         "turn.cancel" => Ok(owner.turn_cancel()),
+        "providers.list" => owner.providers_list(),
+        "models.discover" => {
+            owner
+                .models_discover(
+                    param_str(params, "provider")?,
+                    params.get("refresh").and_then(Value::as_bool).unwrap_or(false),
+                )
+                .await
+        }
+        "providers.test" => {
+            owner
+                .providers_test(
+                    param_str(params, "provider")?,
+                    params.get("api_key").and_then(Value::as_str),
+                )
+                .await
+        }
+        "secrets.set" => {
+            owner
+                .secrets_set(param_str(params, "provider")?, param_str(params, "api_key")?)
+                .await
+        }
+        "usage.get" => Ok(owner.usage_get()),
+        other if crate::governance::GOVERNANCE_METHODS.contains(&other) => {
+            crate::governance::governance_call(owner, other, params).await
+        }
         other => Err(AdminError::new(
             ERR_METHOD_NOT_FOUND,
             format!("method not found: {other}"),

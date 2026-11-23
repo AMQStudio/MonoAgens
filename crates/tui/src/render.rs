@@ -109,6 +109,14 @@ pub fn render_to_buffer(
         crate::log::render_log_overlay(area, buf, &state.log, &palette, state.prefs.icons, hit);
     }
 
+    if state.catalog.is_open() {
+        modal_rect = Some(area);
+        crate::catalog_ui::render_overlay(area, buf, &state.catalog, &palette, state.prefs.icons);
+    } else if state.gov.is_open() {
+        modal_rect = Some(area);
+        crate::views::draw(area, buf, &state.gov, &palette, state.prefs.icons);
+    }
+
     if let Some(toast) = &state.toast {
         render_toast(area, buf, &toast.text, toast.is_error, &palette, state.prefs.icons);
     }
@@ -982,9 +990,17 @@ fn render_status_bar(
         ));
     }
 
-    if state.prefs.show_cost_estimate && !compact {
+    if state.prefs.show_cost_estimate
+        && !compact
+        && let Some(cost) = state.estimated_cost_usd
+    {
+        let text = if cost > 0.0 && cost < 0.01 {
+            format!(" · ${cost:.4}")
+        } else {
+            format!(" · ${cost:.2}")
+        };
         spans.push(Span::styled(
-            format!(" · ${:.2}", state.estimated_cost_usd),
+            text,
             Style::default().fg(palette.muted).bg(palette.status_bg),
         ));
     }
@@ -1007,6 +1023,16 @@ fn render_status_bar(
                 sanitize(&state.chats.active_chat().title, false)
             ),
             Style::default().fg(palette.dim).bg(palette.status_bg),
+        ));
+    }
+
+    if state.gov.pending_count > 0 {
+        spans.push(Span::styled(
+            format!(" · ⚑ {}", state.gov.pending_count),
+            Style::default()
+                .fg(palette.status_yellow)
+                .bg(palette.status_bg)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 

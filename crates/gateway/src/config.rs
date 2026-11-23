@@ -185,6 +185,33 @@ pub struct ModelConfig {
     pub catalog_provider: Option<String>,
     /// `[model.provider_options] base_url` override for any provider.
     pub provider_base_url: Option<String>,
+    /// `[model.purposes.<purpose>]` overrides keyed by purpose (`reason`, `classify`,
+    /// `consolidate`). Empty by default: every purpose uses the `[model]` pair.
+    pub purposes: BTreeMap<String, PurposeModelConfig>,
+    /// User-entered `[model.prices."<provider>/<model>"]`, keyed `"<provider>/<model>"`.
+    pub prices: BTreeMap<String, ModelPrice>,
+}
+
+/// `[model.purposes.<purpose>]`: provider (catalog id, default: the main provider) and model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PurposeModelConfig {
+    pub catalog_provider: Option<String>,
+    pub model: String,
+}
+
+/// User-entered price of one model, USD per million tokens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelPrice {
+    pub input_per_mtok: f64,
+    pub output_per_mtok: f64,
+}
+
+impl ModelConfig {
+    /// Price for `"<provider>/<model>"` from `[model.prices]`, if the user entered one.
+    #[must_use]
+    pub fn price_for(&self, provider: &str, model: &str) -> Option<ModelPrice> {
+        self.prices.get(&format!("{provider}/{model}")).copied()
+    }
 }
 
 impl Default for ModelConfig {
@@ -201,6 +228,8 @@ impl Default for ModelConfig {
             temperature: None,
             catalog_provider: None,
             provider_base_url: None,
+            purposes: BTreeMap::new(),
+            prices: BTreeMap::new(),
         }
     }
 }
@@ -1026,6 +1055,72 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
         {
             let url = url.trim();
             cfg.model.provider_base_url = (!url.is_empty()).then(|| url.to_owned());
+        }
+        if let Some(purposes) = get_opt_table(model_tbl, "purposes")? {
+            for (name, item) in purposes.iter() {
+                let key = format!("model.purposes.{name}");
+                if !matches!(name, "reason" | "classify" | "consolidate") {
+                    return Err(ConfigError::InvalidValue {
+                        key,
+                        value: name.to_owned(),
+                        expected: "purpose 'reason', 'classify' or 'consolidate'",
+                    });
+                }
+                let tbl = item.as_table_like().ok_or_else(|| ConfigError::InvalidType {
+                    key: key.clone(),
+                    expected: "table",
+                })?;
+                let model = get_opt_str(tbl, "model", &format!("{key}.model"))?
+                    .map(|m| m.trim().to_owned())
+                    .filter(|m| !m.is_empty())
+                    .ok_or_else(|| ConfigError::InvalidValue {
+                        key: format!("{key}.model"),
+                        value: String::new(),
+                        expected: "non-empty model name",
+                    })?;
+                let catalog_provider = match get_opt_str(tbl, "provider", &format!("{key}.provider"))? {
+                    None => None,
+                    Some(p) => Some(
+                        monoagens_reason::model::catalog::find(&p)
+                            .map(|e| e.id.clone())
+                            .ok_or_else(|| ConfigError::InvalidValue {
+                                key: format!("{key}.provider"),
+                                value: p,
+                                expected: "a catalog provider id",
+                            })?,
+                    ),
+                };
+                cfg.model
+                    .purposes
+                    .insert(name.to_owned(), PurposeModelConfig { catalog_provider, model });
+            }
+        }
+        if let Some(prices) = get_opt_table(model_tbl, "prices")? {
+            for (name, item) in prices.iter() {
+                let key = format!("model.prices.{name}");
+                let tbl = item.as_table_like().ok_or_else(|| ConfigError::InvalidType {
+                    key: key.clone(),
+                    expected: "table",
+                })?;
+                let price = |field: &str| -> Result<f64, ConfigError> {
+                    let full = format!("{key}.{field}");
+                    let v = get_opt_f64(tbl, field, &full)?.unwrap_or(0.0);
+                    if !v.is_finite() || v < 0.0 {
+                        return Err(ConfigError::OutOfRange {
+                            key: "model.prices",
+                            value: v.to_string(),
+                            range: ">= 0",
+                        });
+                    }
+                    Ok(v)
+                };
+                let input_per_mtok = price("input_per_mtok")?;
+                let output_per_mtok = price("output_per_mtok")?;
+                cfg.model.prices.insert(
+                    name.to_owned(),
+                    ModelPrice { input_per_mtok, output_per_mtok },
+                );
+            }
         }
         if let Some(model_name) = get_opt_str(model_tbl, "model", "model.model")? {
             if model_name.trim().is_empty() {

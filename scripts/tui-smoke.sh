@@ -3,9 +3,10 @@
 # (never /tmp). No paid model calls: the provider is a tiny local fake HTTP server (python3) whose
 # canned reply is switched by the script; the plugin is the gateway's `fake_plugin` example.
 #
-# Checks: composer, plugin autostart dot (green), `/log` shows the plugin stderr line, crash -> red
-# -> green after restart, silent-turn notice, a spoken reply, attach to `monoagens serve` and detach
-# leaving serve running.
+# Checks: composer, /model picker with search, plugin autostart dot (green), `/log` shows the plugin
+# stderr line, crash -> red -> green after restart, silent-turn notice, a spoken reply, attach to
+# `monoagens serve`, the governance panels (/status, /approvals, /events, /activity, /policy)
+# against the attached daemon, and detach leaving serve running.
 #
 # Usage: scripts/tui-smoke.sh   (after `cargo build -p monoagens-cli`; the fake plugin is built on
 # demand with `cargo build --example fake_plugin -p monoagens-gateway`)
@@ -15,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 BIN="${MONOAGENS_BIN:-$TARGET/debug/monoagens}"
 FAKE_PLUGIN="${FAKE_PLUGIN:-$TARGET/debug/examples/fake_plugin}"
-SESSION="wt-c-smoke-$$"
+SESSION="${SMOKE_SESSION:-wt-c-smoke}-$$"
 HOME_DIR="$ROOT/target/tui-smoke/home-$$"
 COLS=140
 ROWS=40
@@ -107,10 +108,11 @@ close_overlay() {
 }
 
 start_tui() {
+  local cfg="${1:-$HOME_DIR/monoagens.toml}"
   rm -f "$HOME_DIR/exit.code"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" \
-    "env HOME='$HOME_DIR' XDG_CONFIG_HOME='$HOME_DIR' TERM=xterm-256color '$BIN' --config '$HOME_DIR/monoagens.toml'; echo \"exit=\$?\" > '$HOME_DIR/exit.code'; sleep 30"
+    "env HOME='$HOME_DIR' XDG_CONFIG_HOME='$HOME_DIR' TERM=xterm-256color '$BIN' --config '$cfg'; echo \"exit=\$?\" > '$HOME_DIR/exit.code'; sleep 30"
 }
 
 quit_tui() {
@@ -161,7 +163,7 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_GET(self):
         if self.path.rstrip("/").endswith("/models"):
-            self._send(200, {"object": "list", "data": [{"id": "fake-model", "object": "model"}]})
+            self._send(200, {"object": "list", "data": [{"id": m, "object": "model"} for m in ("fake-model", "qwen-coder", "qwen-mini", "llama-big")]})
         else:
             self._send(404, {"error": "not found"})
     def do_POST(self):
@@ -262,6 +264,34 @@ echo "ok: reply rendered"
 quit_tui
 echo "ok: clean quit (exit 0)"
 
+# 6b. /model opens the two-pane picker; search narrows the list (catalog provider, fake server)
+cat > "$HOME_DIR/monoagens-catalog.toml" <<TOML
+version = 1
+data_dir = "$HOME_DIR/data"
+
+[model]
+provider = "ollama"
+model = "fake-model"
+
+[model.provider_options]
+base_url = "http://127.0.0.1:$PORT/v1"
+TOML
+start_tui "$HOME_DIR/monoagens-catalog.toml"
+wait_for "enter send"
+tmux send-keys -t "$SESSION" "/model" Enter
+wait_for "Select model"
+wait_for "qwen-coder" 15
+wait_for "llama-big"
+echo "ok: /model opens with the discovered models"
+tmux send-keys -t "$SESSION" "qwen"
+wait_for_absent "llama-big" 5
+screen | grep -qF "qwen-mini" || fail "search removed the matching models"
+echo "ok: search narrows the list"
+tmux send-keys -t "$SESSION" Escape   # clears the search
+sleep 0.3
+close_overlay "Select model"
+quit_tui
+
 # 7. attach to `monoagens serve`, then detach: serve (and its plugin) keep running
 SERVE_OUT="$HOME_DIR/serve.out"
 env HOME="$HOME_DIR" XDG_CONFIG_HOME="$HOME_DIR" "$BIN" --config "$HOME_DIR/monoagens.toml" serve \
@@ -280,6 +310,36 @@ wait_for "Attached to the gateway hosted by pid $SERVE_PID" 20
 tmux send-keys -t "$SESSION" "hello through the socket" Enter
 wait_for "pong smoke" 25
 echo "ok: attached TUI chats through serve"
+
+# 7b. governance panels against the attached daemon: /status (mode serve, the daemon pid and its
+# plugins), /approvals (nothing held), /events (the turns just recorded), /activity (no adapter
+# traffic from the fake plugin), /policy and /people. A held action and an adapter row need
+# seeded events and are covered by the gateway and TUI tests.
+tmux send-keys -t "$SESSION" "/status" Enter
+wait_for "owner pid"
+wait_for "serve"
+wait_for "$SERVE_PID"
+wait_for "fake"
+echo "ok: /status shows mode serve, pid $SERVE_PID and the plugin"
+close_overlay "owner pid"
+tmux send-keys -t "$SESSION" "/approvals" Enter
+wait_for "No pending approvals."
+echo "ok: /approvals opens (empty, no badge)"
+close_overlay "No pending approvals."
+tmux send-keys -t "$SESSION" "/events" Enter
+wait_for "Events"
+wait_for "percept"
+echo "ok: /events lists the recorded turns"
+close_overlay "Events  "
+tmux send-keys -t "$SESSION" "/activity" Enter
+wait_for "No adapter activity yet."
+echo "ok: /activity opens read-only (empty)"
+close_overlay "No adapter activity yet."
+tmux send-keys -t "$SESSION" "/policy" Enter
+wait_for "Cedar rules"
+wait_for "default_cedar_rule_01"
+echo "ok: /policy lists the Cedar rules"
+close_overlay "Cedar rules"
 quit_tui
 kill -0 "$SERVE_PID" 2>/dev/null || fail "serve died when the TUI detached"
 [[ -S "$HOME_DIR/data/gateway.sock" ]] || fail "admin socket vanished after detach"

@@ -31,7 +31,7 @@ use crate::plugins::{
 };
 use crate::prequeue::{PreQueueService, build_embedder_from_config_async};
 use crate::provider::{
-    DailyBudgetTracker, GatewayModelExecutor, TurnRegistry, build_provider_from_config_async,
+    DailyBudgetTracker, GatewayModelExecutor, LiveModel, TurnRegistry, build_model_routes_async,
 };
 use crate::seams::{DoorController, GatewaySeams};
 use crate::waist2::{BodyRouter, BodyRpcError};
@@ -188,6 +188,11 @@ pub(crate) enum ControlCommand {
     ReadEvents {
         reply: oneshot::Sender<Result<Vec<EventRecord>, GatewayError>>,
     },
+    /// Events strictly after `after` (cursor read; O(new events)).
+    ReadEventsAfter {
+        after: monoagens_protocol::EventId,
+        reply: oneshot::Sender<Result<Vec<EventRecord>, GatewayError>>,
+    },
     NextDue {
         reply: oneshot::Sender<Option<Time>>,
     },
@@ -257,6 +262,7 @@ pub struct GatewayHandle {
     ownership_stats: OwnershipStats,
     shutdown_grace_ms: u64,
     turns: TurnRegistry,
+    live_model: LiveModel,
 }
 
 impl GatewayHandle {
@@ -442,6 +448,18 @@ impl GatewayHandle {
         rx.await.map_err(|_| GatewayError::OwnerExited)?
     }
 
+    /// Reads the events recorded strictly after `after` via the owner task (cursor read).
+    pub async fn read_events_after(
+        &self,
+        after: monoagens_protocol::EventId,
+    ) -> Result<Vec<EventRecord>, GatewayError> {
+        let (tx, rx) = oneshot::channel();
+        self.control_tx
+            .send(ControlCommand::ReadEventsAfter { after, reply: tx })
+            .map_err(|_| GatewayError::OwnerExited)?;
+        rx.await.map_err(|_| GatewayError::OwnerExited)?
+    }
+
     /// Queries `Core::next_due()` via the owner task.
     pub async fn next_due(&self) -> Result<Option<Time>, GatewayError> {
         let (tx, rx) = oneshot::channel();
@@ -537,6 +555,25 @@ impl GatewayHandle {
         self.turns
             .cancel_reasoning(&self.ingress, &self.diagnostics, self.clock.now())
             .len()
+    }
+
+    /// The swappable provider routes (main and per-purpose) of this gateway.
+    #[must_use]
+    pub fn live_model(&self) -> &LiveModel {
+        &self.live_model
+    }
+
+    /// Rebuilds the main and per-purpose providers from `config` + `secrets` and swaps them in
+    /// live: the next model request uses them, in-flight calls finish on the old provider.
+    /// On error the previous routes stay in place.
+    pub async fn rebuild_model(
+        &self,
+        config: &GatewayConfig,
+        secrets: &monoagens_reason::ProviderSecrets,
+    ) -> Result<(), crate::provider::ProviderInitError> {
+        let routes = build_model_routes_async(config, secrets, None).await?;
+        self.live_model.replace(routes);
+        Ok(())
     }
 
     /// Number of model calls currently in flight.
@@ -646,16 +683,13 @@ impl GatewayRuntime {
             options.seams.pre_queue_service = Some(service);
         }
 
-        let provider = match options.provider {
-            Some(p) => p,
-            None => build_provider_from_config_async(&config, secrets)
-                .await
-                .map_err(|e| GatewayError::ProviderInit(e.to_string()))?,
-        };
+        let routes = build_model_routes_async(&config, secrets, options.provider)
+            .await
+            .map_err(|e| GatewayError::ProviderInit(e.to_string()))?;
 
         let budget = DailyBudgetTracker::new(options.clock.now(), config.model.daily_token_budget);
-        let model_exec = GatewayModelExecutor::with_provider(
-            provider,
+        let model_exec = GatewayModelExecutor::with_routes(
+            routes,
             &config,
             budget.clone(),
             options.diagnostics.clone(),
@@ -664,6 +698,7 @@ impl GatewayRuntime {
         );
 
         let turns = model_exec.turns().clone();
+        let live_model = model_exec.live_model().clone();
         let seams_for_handle = options.seams.clone();
         let pre_queue_for_owner = options.seams.pre_queue_service.clone();
         let ingress = IngressQueue::new();
@@ -715,6 +750,7 @@ impl GatewayRuntime {
             ownership_stats,
             shutdown_grace_ms: config.runtime.body_shutdown_grace_ms,
             turns,
+            live_model,
         };
 
         Ok(Self {
@@ -1048,6 +1084,14 @@ fn handle_control_command<S: Store, D: DoorController>(
             let res = core
                 .store()
                 .read_in_order(None, usize::MAX)
+                .map_err(GatewayError::from);
+            let _ = reply.send(res);
+            false
+        }
+        ControlCommand::ReadEventsAfter { after, reply } => {
+            let res = core
+                .store()
+                .read_in_order(Some(after), usize::MAX)
                 .map_err(GatewayError::from);
             let _ = reply.send(res);
             false

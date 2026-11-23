@@ -21,19 +21,19 @@
 - [x] 2.3 Provider error classification (429/auth/timeout) and `provider` log entries. Acceptance: first a test recording today's behaviour, then fake-server 429 test.
 
 ## 3. Live rebuild and admin method (`crates/gateway`)
-- [ ] 3.1 Provider rebuild hook called by `config.apply` (main and titler provider). Acceptance: test switches model and sees the new id in the next request.
-- [ ] 3.2 Admin method `models.discover` (shape proposed in design, confirm in review). Acceptance: test through the socket client and the in-process client.
+- [x] 3.1 Provider rebuild hook called by `config.apply` (main and titler provider). Acceptance: test switches model and sees the new id in the next request.
+- [x] 3.2 Admin method `models.discover` (shape proposed in design, confirm in review). Acceptance: test through the socket client and the in-process client.
 
 ## 4. Picker and login (`crates/tui`)
-- [ ] 4.1 `/model` two-pane picker (D10): cache first, background refresh, `r`, search, scrollbar, detail line, manual id entry, unconfigured-provider key detour. Acceptance: `TestBackend` tests + snapshots at 80x24 and 120x40.
-- [ ] 4.2 `/login` list + masked key entry + connection test; slash descriptions with live state. Acceptance: test against the fake server; `secrets.toml` mode 0600.
-- [ ] 4.3 Error notices for provider failures. Acceptance: 429 scenario test.
+- [x] 4.1 `/model` two-pane picker (D10): cache first, background refresh, `r`, search, scrollbar, detail line, manual id entry, unconfigured-provider key detour. Acceptance: `TestBackend` tests + snapshots at 80x24 and 120x40.
+- [x] 4.2 `/login` list + masked key entry + connection test; slash descriptions with live state. Acceptance: test against the fake server; `secrets.toml` mode 0600.
+- [x] 4.3 Error notices for provider failures. Acceptance: 429 scenario test.
 
 ## 5. Purposes, cost, usage (`crates/reason`, `crates/gateway`, `crates/tui`)
-- [ ] 5.1 `[model.purposes.<purpose>]` config + routing; titler uses classify's model. Acceptance: tests from the spec scenarios (check purpose names in code first).
-- [ ] 5.2 Prices: from discovery (`ModelInfo`) or `[model.prices."<provider>/<model>"]`; hide cost when unknown. Acceptance: status bar tests for both scenarios.
-- [ ] 5.3 `/usage` view. Acceptance: test with one reasoning and one classify call.
+- [x] 5.1 `[model.purposes.<purpose>]` config + routing; titler uses classify's model. Acceptance: tests from the spec scenarios (check purpose names in code first).
+- [x] 5.2 Prices: from discovery (`ModelInfo`) or `[model.prices."<provider>/<model>"]`; hide cost when unknown. Acceptance: status bar tests for both scenarios.
+- [x] 5.3 `/usage` view. Acceptance: test with one reasoning and one classify call.
 
 ## 6. Finish
-- [ ] 6.1 Extend `scripts/tui-smoke.sh`: `/model` opens, search narrows the list (fake provider server). Acceptance: script exits 0.
+- [x] 6.1 Extend `scripts/tui-smoke.sh`: `/model` opens, search narrows the list (fake provider server). Acceptance: script exits 0.
 - [ ] 6.2 `openspec validate model-provider-catalog --strict`; GitNexus `detect_changes --scope all` reviewed; `cargo test` for touched crates; clippy as in the rules above.

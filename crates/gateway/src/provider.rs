@@ -2,7 +2,7 @@
 //! daily token budget tracking, and bounded async execution over `crates/reason`.
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -42,11 +42,40 @@ pub struct DailyBudgetTracker {
     state: Arc<Mutex<DailyBudgetState>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct DailyBudgetState {
     utc_day: u64,
     used_tokens: u64,
     daily_limit: u64,
+    usage: BTreeMap<(&'static str, String, String), UsageCounts>,
+}
+
+/// Calls and tokens of one `(purpose, provider, model)` today.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsageCounts {
+    pub calls: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// One row of [`DailyBudgetTracker::usage_snapshot`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageRow {
+    pub purpose: &'static str,
+    /// Catalog provider id (or the legacy provider kind).
+    pub provider: String,
+    pub model: String,
+    pub counts: UsageCounts,
+}
+
+/// Snake-case name of a [`ModelPurpose`] (the `[model.purposes.<name>]` key).
+#[must_use]
+pub const fn purpose_name(purpose: ModelPurpose) -> &'static str {
+    match purpose {
+        ModelPurpose::Reason => "reason",
+        ModelPurpose::Classify => "classify",
+        ModelPurpose::Consolidate => "consolidate",
+    }
 }
 
 impl DailyBudgetTracker {
@@ -58,6 +87,7 @@ impl DailyBudgetTracker {
                 utc_day: utc_day_of(now),
                 used_tokens: 0,
                 daily_limit: daily_limit.max(1),
+                usage: BTreeMap::new(),
             })),
         }
     }
@@ -69,9 +99,55 @@ impl DailyBudgetTracker {
         if day != st.utc_day {
             st.utc_day = day;
             st.used_tokens = 0;
+            st.usage.clear();
         }
         st.used_tokens = st.used_tokens.saturating_add(tokens);
         (st.used_tokens, st.daily_limit)
+    }
+
+    /// Records one completed model call (tokens toward the daily budget plus the per-purpose
+    /// counters shown by `/usage`) and returns `(used, limit)`.
+    pub fn record_call(
+        &self,
+        now: Time,
+        purpose: ModelPurpose,
+        provider: &str,
+        model: &str,
+        usage: Option<monoagens_reason::TokenUsage>,
+    ) -> (u64, u64) {
+        let out = self.record_tokens(now, usage.map_or(0, |u| u.total_tokens));
+        let mut st = self.state.lock().expect("daily budget lock");
+        let c = st
+            .usage
+            .entry((purpose_name(purpose), provider.to_owned(), model.to_owned()))
+            .or_default();
+        c.calls += 1;
+        if let Some(u) = usage {
+            c.input_tokens = c.input_tokens.saturating_add(u.input_tokens);
+            c.output_tokens = c.output_tokens.saturating_add(u.output_tokens);
+        }
+        out
+    }
+
+    /// Today's usage per `(purpose, provider, model)`.
+    #[must_use]
+    pub fn usage_snapshot(&self, now: Time) -> Vec<UsageRow> {
+        let mut st = self.state.lock().expect("daily budget lock");
+        let day = utc_day_of(now);
+        if day != st.utc_day {
+            st.utc_day = day;
+            st.used_tokens = 0;
+            st.usage.clear();
+        }
+        st.usage
+            .iter()
+            .map(|((purpose, provider, model), counts)| UsageRow {
+                purpose,
+                provider: provider.clone(),
+                model: model.clone(),
+                counts: *counts,
+            })
+            .collect()
     }
 
     /// Returns current `(used_tokens, daily_limit)` at `now`.
@@ -82,6 +158,7 @@ impl DailyBudgetTracker {
         if day != st.utc_day {
             st.utc_day = day;
             st.used_tokens = 0;
+            st.usage.clear();
         }
         (st.used_tokens, st.daily_limit)
     }
@@ -207,6 +284,194 @@ pub async fn build_provider_from_config_async(
         .map_err(|e| ProviderInitError {
             detail: format!("provider builder task panicked: {e}"),
         })?
+}
+
+/// Provider and model name for the main `[model]` pair and for each `[model.purposes.*]`
+/// override. Built from config, swapped live into a [`LiveModel`] by `config.apply`.
+#[derive(Clone)]
+pub struct ModelRoutes {
+    main: RouteSpec,
+    purposes: HashMap<ModelPurpose, RouteSpec>,
+}
+
+/// Provider, model name and provider label (catalog id) of one route.
+#[derive(Clone)]
+struct RouteSpec {
+    provider: Arc<dyn ModelProvider>,
+    model: String,
+    label: String,
+}
+
+/// Label of the main provider: catalog id, else the legacy provider kind.
+fn main_label(config: &GatewayConfig) -> String {
+    config
+        .model
+        .catalog_provider
+        .clone()
+        .unwrap_or_else(|| config.model.provider.as_str().to_owned())
+}
+
+impl ModelRoutes {
+    /// Routes where every purpose uses `provider` and the configured main model (unless
+    /// `[model.purposes.<purpose>]` names another model on the same provider).
+    #[must_use]
+    pub fn single(provider: Arc<dyn ModelProvider>, config: &GatewayConfig) -> Self {
+        let mut purposes = HashMap::new();
+        for (name, p) in &config.model.purposes {
+            if p.catalog_provider.is_none()
+                && let Some(purpose) = purpose_from_name(name)
+            {
+                purposes.insert(
+                    purpose,
+                    RouteSpec {
+                        provider: Arc::clone(&provider),
+                        model: p.model.clone(),
+                        label: main_label(config),
+                    },
+                );
+            }
+        }
+        Self {
+            main: RouteSpec {
+                provider,
+                model: config.model.model.clone(),
+                label: main_label(config),
+            },
+            purposes,
+        }
+    }
+}
+
+/// Maps a `[model.purposes.<name>]` key to the Core's [`ModelPurpose`].
+#[must_use]
+pub fn purpose_from_name(name: &str) -> Option<ModelPurpose> {
+    match name {
+        "reason" => Some(ModelPurpose::Reason),
+        "classify" => Some(ModelPurpose::Classify),
+        "consolidate" => Some(ModelPurpose::Consolidate),
+        _ => None,
+    }
+}
+
+/// Builds the main provider (or reuses `main`) and one provider per distinct
+/// `[model.purposes.<purpose>] provider`. Blocking: call from `spawn_blocking`.
+pub fn build_model_routes(
+    config: &GatewayConfig,
+    secrets: &ProviderSecrets,
+    main: Option<Arc<dyn ModelProvider>>,
+) -> Result<ModelRoutes, ProviderInitError> {
+    let main = match main {
+        Some(p) => p,
+        None => build_provider_from_config(config, secrets)?,
+    };
+    let mut routes = ModelRoutes::single(main, config);
+    for (name, p) in &config.model.purposes {
+        let (Some(purpose), Some(id)) = (purpose_from_name(name), p.catalog_provider.as_deref())
+        else {
+            continue;
+        };
+        let mut sub = config.clone();
+        sub.model.model.clone_from(&p.model);
+        sub.model.provider_base_url = None;
+        let provider = build_catalog_provider(&sub, secrets, id)?;
+        routes.purposes.insert(
+            purpose,
+            RouteSpec {
+                provider,
+                model: p.model.clone(),
+                label: id.to_owned(),
+            },
+        );
+    }
+    Ok(routes)
+}
+
+/// Async-safe [`build_model_routes`] (blocking client construction on `spawn_blocking`).
+pub async fn build_model_routes_async(
+    config: &GatewayConfig,
+    secrets: &ProviderSecrets,
+    main: Option<Arc<dyn ModelProvider>>,
+) -> Result<ModelRoutes, ProviderInitError> {
+    let cfg = config.clone();
+    let sec = secrets.clone();
+    tokio::task::spawn_blocking(move || build_model_routes(&cfg, &sec, main))
+        .await
+        .map_err(|e| ProviderInitError {
+            detail: format!("provider builder task panicked: {e}"),
+        })?
+}
+
+#[derive(Clone)]
+struct Route {
+    provider: BlockingSafeProvider,
+    model: String,
+    label: String,
+}
+
+struct LiveRoutes {
+    main: Route,
+    purposes: HashMap<ModelPurpose, Route>,
+}
+
+impl LiveRoutes {
+    fn from_routes(r: ModelRoutes) -> Self {
+        let wrap = |r: RouteSpec| Route {
+            provider: BlockingSafeProvider(Arc::new(ProviderSlot(Some(r.provider)))),
+            model: r.model,
+            label: r.label,
+        };
+        Self {
+            main: wrap(r.main),
+            purposes: r.purposes.into_iter().map(|(k, v)| (k, wrap(v))).collect(),
+        }
+    }
+
+    fn route(&self, purpose: ModelPurpose) -> &Route {
+        self.purposes.get(&purpose).unwrap_or(&self.main)
+    }
+}
+
+/// The swappable provider routes shared by the model executor and the gateway handle.
+/// `config.apply` replaces them in place; the next model request uses the new ones.
+#[derive(Clone)]
+pub struct LiveModel {
+    routes: Arc<Mutex<Arc<LiveRoutes>>>,
+}
+
+impl LiveModel {
+    /// Creates a live model holding `routes`.
+    #[must_use]
+    pub fn new(routes: ModelRoutes) -> Self {
+        Self {
+            routes: Arc::new(Mutex::new(Arc::new(LiveRoutes::from_routes(routes)))),
+        }
+    }
+
+    /// Swaps in new routes; in-flight calls keep the provider they started with.
+    pub fn replace(&self, routes: ModelRoutes) {
+        *self.routes.lock().expect("live model lock") = Arc::new(LiveRoutes::from_routes(routes));
+    }
+
+    fn snapshot(&self) -> Arc<LiveRoutes> {
+        Arc::clone(&self.routes.lock().expect("live model lock"))
+    }
+
+    /// Provider label (catalog id) currently used for `purpose`.
+    #[must_use]
+    pub fn label_for(&self, purpose: ModelPurpose) -> String {
+        self.snapshot().route(purpose).label.clone()
+    }
+
+    /// Provider and model name currently used for `purpose` (the titler uses `Classify`).
+    #[must_use]
+    pub fn route_for(&self, purpose: ModelPurpose) -> (Arc<dyn ModelProvider>, String) {
+        let snap = self.snapshot();
+        let r = snap.route(purpose);
+        (
+            Arc::clone(r.provider.0.0.as_ref().expect("provider present before drop")),
+            r.model.clone(),
+        )
+    }
 }
 
 
@@ -347,8 +612,7 @@ impl Drop for ProviderSlot {
 /// every call (model, purpose, tokens incl. cached, latency, outcome) and updates daily budget.
 #[derive(Clone)]
 pub struct GatewayModelExecutor {
-    provider: BlockingSafeProvider,
-    model_name: String,
+    live: LiveModel,
     timeout_ms: u64,
     max_output_tokens: Option<u32>,
     output_limits: monoagens_reason::OutputLimitProfile,
@@ -374,9 +638,21 @@ impl GatewayModelExecutor {
         cues: CueRecorder,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        Self::with_routes(ModelRoutes::single(provider, config), config, budget, diagnostics, cues, clock)
+    }
+
+    /// Creates a model executor over explicit per-purpose `routes`.
+    #[must_use]
+    pub fn with_routes(
+        routes: ModelRoutes,
+        config: &GatewayConfig,
+        budget: DailyBudgetTracker,
+        diagnostics: DiagnosticSink,
+        cues: CueRecorder,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
-            provider: BlockingSafeProvider(Arc::new(ProviderSlot(Some(provider)))),
-            model_name: config.model.model.clone(),
+            live: LiveModel::new(routes),
             timeout_ms: config.runtime.model_timeout_ms,
             max_output_tokens: config.model.max_output_tokens,
             output_limits: config.model.output_limits.clone(),
@@ -389,6 +665,12 @@ impl GatewayModelExecutor {
             clock,
             turns: TurnRegistry::default(),
         }
+    }
+
+    /// Returns the swappable provider routes (shared with the gateway handle).
+    #[must_use]
+    pub fn live_model(&self) -> &LiveModel {
+        &self.live
     }
 
     /// Returns the registry of in-flight model calls (used by `turn.cancel`).
@@ -415,8 +697,9 @@ impl GatewayModelExecutor {
                 &format!("failed to populate ContextPlan payloads for {request_id}: {err}"),
             );
         }
+        let model_name = self.live.snapshot().route(purpose).model.clone();
         let mut req =
-            build_model_request_from_plan(plan, &extras, request_id, purpose, &self.model_name);
+            build_model_request_from_plan(plan, &extras, request_id, purpose, &model_name);
         req.timeout_ms = self.timeout_ms;
         req.max_output_tokens = Some(
             self.max_output_tokens
@@ -471,13 +754,16 @@ impl GatewayModelExecutor {
         let purpose = req.purpose;
         let model = req.model.clone();
         let timeout_ms = req.timeout_ms.max(1);
-        let provider_ref = self
+        let routes = self.live.snapshot();
+        let provider_ref = routes
+            .route(purpose)
             .provider
             .0
             .0
             .as_ref()
             .expect("provider present before drop");
         let provider_name = provider_ref.provider_name().to_owned();
+        let route_label = routes.route(purpose).label.clone();
         let started_at = self.clock.now();
 
         let _cue_guard = spawn_wait_cue_monitor(
@@ -562,7 +848,13 @@ impl GatewayModelExecutor {
             }
             Ok(Ok(success)) => {
                 let tokens = success.record.usage.map_or(0, |u| u.total_tokens);
-                let (_used, _limit) = self.budget.record_tokens(self.clock.now(), tokens);
+                let (_used, _limit) = self.budget.record_call(
+                    self.clock.now(),
+                    purpose,
+                    &route_label,
+                    &model,
+                    success.record.usage,
+                );
                 self.diagnostics.record_model_call(success.record.clone());
                 self.diagnostics.log(
                     self.clock.now(),

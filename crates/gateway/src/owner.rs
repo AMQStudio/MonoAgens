@@ -9,7 +9,10 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use monoagens_core::Input;
+use monoagens_core::{Input, ModelPurpose};
+use monoagens_reason::model::catalog::{self, CatalogEntry};
+use monoagens_reason::model::discovery;
+use monoagens_reason::{ProviderSecrets, SecretString};
 use monoagens_protocol::{
     ActorId, ApprovalResolveParams, Audience, CapabilityId, ChannelId, OpaquePayload, Percept,
     PlaceId, Taint,
@@ -116,6 +119,17 @@ pub struct GatewayOwner {
     data_dir: PathBuf,
     owner_actor: ActorId,
     provider_hook: Mutex<Option<ProviderHook>>,
+    jobs: crate::governance::Jobs,
+    approvals: tokio::sync::Mutex<ApprovalsCache>,
+    approvals_full_replays: std::sync::atomic::AtomicUsize,
+}
+
+/// Pending approvals derived from the event log, kept between `approvals.list` polls.
+#[derive(Default)]
+struct ApprovalsCache {
+    /// Id of the last event folded into `entries` (`None` before the first poll).
+    last_id: Option<monoagens_protocol::EventId>,
+    entries: Vec<crate::governance::PendingApprovalEntry>,
 }
 
 impl GatewayOwner {
@@ -132,7 +146,96 @@ impl GatewayOwner {
             data_dir: p.data_dir,
             owner_actor: p.owner_actor,
             provider_hook: Mutex::new(None),
+            jobs: crate::governance::Jobs::default(),
+            approvals: tokio::sync::Mutex::new(ApprovalsCache::default()),
+            approvals_full_replays: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Pending approvals, maintained incrementally: an idle poll only asks the store for events
+    /// after the cursor (O(new events)); the log is replayed in full only when a new event
+    /// can change the approval projection (hold, verdict, receipt, expectation, forget).
+    pub async fn approvals_pending(
+        &self,
+    ) -> Result<Vec<crate::governance::PendingApprovalEntry>, AdminError> {
+        use monoagens_core::EventKind;
+        use std::sync::atomic::Ordering;
+        let mut cache = self.approvals.lock().await;
+        let mut stale = cache.last_id.is_none();
+        if let Some(after) = cache.last_id {
+            match self.handle.read_events_after(after).await {
+                Ok(new) => {
+                    if let Some(last) = new.last() {
+                        stale = new.iter().any(|e| {
+                            matches!(
+                                e.kind,
+                                EventKind::HardForget
+                                    | EventKind::Action
+                                    | EventKind::DoorVerdict
+                                    | EventKind::Receipt
+                                    | EventKind::ExpectationChanged
+                            )
+                        });
+                        cache.last_id = Some(last.id);
+                    }
+                }
+                Err(_) => stale = true,
+            }
+        }
+        if stale {
+            self.approvals_full_replays.fetch_add(1, Ordering::Relaxed);
+            let events = self
+                .handle
+                .read_events()
+                .await
+                .map_err(|e| AdminError::server(e.to_string()))?;
+            let cfg = self.config_snapshot();
+            let secrets = crate::secrets::load_approval_secrets(Some(&self.secrets_path), |k| {
+                std::env::var(k).ok()
+            })
+            .map_err(|e| AdminError::server(e.to_string()))?;
+            let mac_key = crate::secrets::resolve_approval_mac_key(&secrets);
+            cache.entries = crate::governance::pending_approvals(
+                &events,
+                &self.owner_actor,
+                &crate::governance::build_valve_config(&cfg),
+                mac_key,
+            );
+            cache.last_id = events.last().map(|e| e.id);
+        }
+        Ok(cache.entries.clone())
+    }
+
+    /// Number of full event-log replays done for `approvals.list` (test hook).
+    #[must_use]
+    pub fn approvals_full_replays(&self) -> usize {
+        self.approvals_full_replays
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Copy of the current configuration (after the latest `config.apply`).
+    #[must_use]
+    pub fn config_snapshot(&self) -> GatewayConfig {
+        self.config.lock().expect("owner config lock").clone()
+    }
+
+    #[must_use]
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
+    #[must_use]
+    pub fn secrets_path(&self) -> &std::path::Path {
+        &self.secrets_path
+    }
+
+    #[must_use]
+    pub fn owner_actor(&self) -> &ActorId {
+        &self.owner_actor
+    }
+
+    pub(crate) fn jobs(&self) -> &crate::governance::Jobs {
+        &self.jobs
     }
 
     #[must_use]
@@ -164,6 +267,8 @@ impl GatewayOwner {
         json!({
             "owner": { "pid": std::process::id(), "mode": self.mode },
             "data_dir": self.data_dir.display().to_string(),
+            "socket": crate::admin::admin_socket_path(&self.data_dir).display().to_string(),
+            "lock_path": self.data_dir.join(crate::lock::GATEWAY_LOCK_FILENAME).display().to_string(),
             "provider": cfg.model.provider.as_str(),
             "model": cfg.model.model,
             "embedder": cfg.embed.backend.as_str(),
@@ -179,7 +284,248 @@ impl GatewayOwner {
 
     fn budget_json(&self) -> Value {
         let (used, limit) = self.handle.budget().snapshot(self.handle.clock().now());
-        json!({ "used": used, "limit": limit })
+        json!({ "used": used, "limit": limit, "cost_usd": self.cost_today().0 })
+    }
+
+    fn cache_dir(&self) -> PathBuf {
+        self.data_dir.join("cache").join("models")
+    }
+
+    /// `(input, output)` USD per million tokens for `provider`/`model`: the user's
+    /// `[model.prices]` entry, else the discovery cache.
+    fn price_of(&self, cfg: &GatewayConfig, provider: &str, model: &str) -> Option<(f64, f64)> {
+        if let Some(p) = cfg.model.price_for(provider, model) {
+            return Some((p.input_per_mtok, p.output_per_mtok));
+        }
+        let list = discovery::read_cache(&self.cache_dir(), provider)?;
+        let m = list.models.iter().find(|m| m.id == model)?;
+        Some((m.price_in_per_mtok?, m.price_out_per_mtok?))
+    }
+
+    /// Today's cost in USD and the per-row costs, or `None` while any price is unknown
+    /// (including the active model's): the status bar then hides the cost.
+    fn cost_today(&self) -> (Option<f64>, Vec<Option<f64>>) {
+        let cfg = self.config.lock().expect("owner config lock").clone();
+        let rows = self.handle.budget().usage_snapshot(self.handle.clock().now());
+        let label = self.handle.live_model().label_for(ModelPurpose::Reason);
+        let (_, model) = self.handle.live_model().route_for(ModelPurpose::Reason);
+        let active = self.price_of(&cfg, &label, &model);
+        let per_row: Vec<Option<f64>> = rows
+            .iter()
+            .map(|r| {
+                self.price_of(&cfg, &r.provider, &r.model).map(|(pi, po)| {
+                    r.counts.input_tokens as f64 / 1e6 * pi
+                        + r.counts.output_tokens as f64 / 1e6 * po
+                })
+            })
+            .collect();
+        let total = if active.is_some() && per_row.iter().all(Option::is_some) {
+            Some(per_row.iter().flatten().sum())
+        } else {
+            None
+        };
+        (total, per_row)
+    }
+
+    /// `usage.get`: `{day_utc, budget:{used,limit,left}, cost_usd, purposes:[{purpose,
+    /// provider, model, calls, input_tokens, output_tokens, cost_usd}]}` for today (UTC).
+    #[must_use]
+    pub fn usage_get(&self) -> Value {
+        let now = self.handle.clock().now();
+        let (used, limit) = self.handle.budget().snapshot(now);
+        let rows = self.handle.budget().usage_snapshot(now);
+        let (total, per_row) = self.cost_today();
+        let purposes: Vec<Value> = rows
+            .iter()
+            .zip(per_row)
+            .map(|(r, cost)| {
+                json!({
+                    "purpose": r.purpose,
+                    "provider": r.provider,
+                    "model": r.model,
+                    "calls": r.counts.calls,
+                    "input_tokens": r.counts.input_tokens,
+                    "output_tokens": r.counts.output_tokens,
+                    "cost_usd": cost,
+                })
+            })
+            .collect();
+        json!({
+            "day_utc": now.as_millis() / 86_400_000,
+            "budget": { "used": used, "limit": limit, "left": limit.saturating_sub(used) },
+            "cost_usd": total,
+            "purposes": purposes,
+        })
+    }
+
+    fn load_secrets(&self) -> Result<ProviderSecrets, AdminError> {
+        crate::secrets::load_provider_secrets(Some(&self.secrets_path), |n| std::env::var(n).ok())
+            .map_err(|e| AdminError::server(format!("failed to load secrets: {e}")))
+    }
+
+    fn catalog_entry(provider: &str) -> Result<&'static CatalogEntry, AdminError> {
+        catalog::find(provider)
+            .ok_or_else(|| AdminError::invalid_params(format!("unknown provider '{provider}'")))
+    }
+
+    /// Base URL override from `[model.provider_options]`, only for the configured provider.
+    fn base_override(&self, id: &str) -> Option<String> {
+        let cfg = self.config.lock().expect("owner config lock");
+        (cfg.model.catalog_provider.as_deref() == Some(id))
+            .then(|| cfg.model.provider_base_url.clone())
+            .flatten()
+    }
+
+    /// `providers.list`: `{current:{provider,model}, providers:[{id,label,keyless,key_set,
+    /// key_source,discovery,default_model,current}]}` from the catalog plus key state. Never
+    /// returns key material.
+    pub fn providers_list(&self) -> Result<Value, AdminError> {
+        let secrets = self.load_secrets()?;
+        let (current, model) = {
+            let cfg = self.config.lock().expect("owner config lock");
+            (cfg.model.catalog_provider.clone(), cfg.model.model.clone())
+        };
+        let providers: Vec<Value> = catalog::entries()
+            .iter()
+            .map(|e| {
+                let from_secrets = secrets.provider_keys.get(&e.id).is_some_and(|k| !k.is_empty());
+                let from_env = e
+                    .api_key_env
+                    .iter()
+                    .any(|n| std::env::var(n).is_ok_and(|v| !v.trim().is_empty()));
+                let source = if from_secrets {
+                    Some("secrets")
+                } else if from_env {
+                    Some("env")
+                } else if !e.keyless && secrets.model_api_key.is_some() {
+                    Some("legacy")
+                } else {
+                    None
+                };
+                json!({
+                    "id": e.id,
+                    "label": e.label,
+                    "keyless": e.keyless,
+                    "key_set": source.is_some(),
+                    "key_source": source,
+                    "discovery": e.discovery != catalog::DiscoveryMode::None,
+                    "default_model": e.default_model,
+                    "current": current.as_deref() == Some(e.id.as_str()),
+                })
+            })
+            .collect();
+        Ok(json!({ "current": { "provider": current, "model": model }, "providers": providers }))
+    }
+
+    /// `models.discover` `{provider, refresh}`: `{provider, models:[ModelInfo], fetched_at_ms,
+    /// stale, cached, error}`. Without `refresh` only the cache is read (instant, no network);
+    /// with `refresh` the provider is asked (10 s timeout) and the cache rewritten, falling
+    /// back to the cached list (`stale: true`) plus an `error` text when that fails.
+    pub async fn models_discover(&self, provider: &str, refresh: bool) -> Result<Value, AdminError> {
+        let entry = Self::catalog_entry(provider)?;
+        let cache_dir = self.cache_dir();
+        if !refresh {
+            let list = discovery::read_cache(&cache_dir, &entry.id);
+            return Ok(match list {
+                Some(l) => json!({
+                    "provider": entry.id, "models": l.models, "fetched_at_ms": l.fetched_at_ms,
+                    "stale": false, "cached": true, "error": null,
+                }),
+                None => json!({
+                    "provider": entry.id, "models": [], "fetched_at_ms": 0,
+                    "stale": false, "cached": true, "error": null,
+                }),
+            });
+        }
+        let key = self.load_secrets()?.api_key_for(entry, |n| std::env::var(n).ok());
+        let base = self.base_override(&entry.id);
+        let (list, err) = tokio::task::spawn_blocking(move || {
+            discovery::list_models_cached(entry, key.as_ref(), base.as_deref(), &cache_dir)
+        })
+        .await
+        .map_err(|e| AdminError::server(format!("discovery task failed: {e}")))?;
+        let error = err.map(|e| e.to_string());
+        if let Some(e) = &error {
+            self.runlog
+                .warn("discovery", &format!("model discovery for '{}' failed: {e}", entry.id));
+        }
+        Ok(json!({
+            "provider": entry.id, "models": list.models, "fetched_at_ms": list.fetched_at_ms,
+            "stale": list.stale, "cached": false, "error": error,
+        }))
+    }
+
+    /// `providers.test` `{provider, api_key?}`: connection test by listing models with the
+    /// given key (or the stored one): `{ok, model_count, latency_ms, error}`. Saves nothing.
+    pub async fn providers_test(
+        &self,
+        provider: &str,
+        api_key: Option<&str>,
+    ) -> Result<Value, AdminError> {
+        let entry = Self::catalog_entry(provider)?;
+        let key = match api_key.map(str::trim).filter(|k| !k.is_empty()) {
+            Some(k) => Some(SecretString::new(k)),
+            None => self.load_secrets()?.api_key_for(entry, |n| std::env::var(n).ok()),
+        };
+        let base = self.base_override(&entry.id);
+        let started = std::time::Instant::now();
+        let res = tokio::task::spawn_blocking(move || {
+            discovery::list_models(entry, key.as_ref(), base.as_deref())
+        })
+        .await
+        .map_err(|e| AdminError::server(format!("connection test task failed: {e}")))?;
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Ok(match res {
+            Ok(models) => {
+                self.runlog.info(
+                    "discovery",
+                    &format!("connection test for '{}': {} models in {latency_ms} ms", entry.id, models.len()),
+                );
+                json!({ "ok": true, "model_count": models.len(), "latency_ms": latency_ms, "error": null })
+            }
+            Err(e) => {
+                self.runlog.warn(
+                    "discovery",
+                    &format!("connection test for '{}' failed: {e}", entry.id),
+                );
+                json!({ "ok": false, "model_count": 0, "latency_ms": latency_ms, "error": e.to_string() })
+            }
+        })
+    }
+
+    /// `secrets.set` `{provider, api_key}`: writes `[providers.<id>] api_key` into
+    /// `secrets.toml` (mode `0600`, other content kept) and rebuilds the live provider when
+    /// that provider is in use. The key is never echoed back or logged.
+    pub async fn secrets_set(&self, provider: &str, api_key: &str) -> Result<Value, AdminError> {
+        let entry = Self::catalog_entry(provider)?;
+        let key = api_key.trim();
+        if key.is_empty() || key.chars().any(char::is_control) {
+            return Err(AdminError::invalid_params("api_key must be a non-empty single line"));
+        }
+        write_provider_key(&self.secrets_path, &entry.id, key)
+            .map_err(|e| AdminError::server(format!("failed to write secrets: {e}")))?;
+        self.handle
+            .diagnostics()
+            .register_secret(&SecretString::new(key));
+        self.runlog
+            .info("settings", &format!("API key saved for provider '{}'", entry.id));
+        let cfg = self.config.lock().expect("owner config lock").clone();
+        let in_use = cfg.model.catalog_provider.as_deref() == Some(entry.id.as_str())
+            || cfg
+                .model
+                .purposes
+                .values()
+                .any(|p| p.catalog_provider.as_deref() == Some(entry.id.as_str()));
+        let mut rebuilt = false;
+        if in_use && cfg.model.provider != crate::config::ModelProviderKind::Scripted {
+            let secrets = self.load_secrets()?;
+            self.handle
+                .rebuild_model(&cfg, &secrets)
+                .await
+                .map_err(|e| AdminError::server(format!("key saved but provider rebuild failed: {e}")))?;
+            rebuilt = true;
+        }
+        Ok(json!({ "ok": true, "provider_rebuilt": rebuilt }))
     }
 
     /// `events.since`: `{total, events, budget}` with the log entries at index `from..`.
@@ -283,6 +629,9 @@ impl GatewayOwner {
             new_cfg.clone(),
         );
 
+        // Valve / RBAC settings feed the approval projection: rebuild it on the next poll.
+        self.approvals.lock().await.last_id = None;
+
         let mut report = ReloadReport::default();
         if old.valve != new_cfg.valve
             || old.rbac != new_cfg.rbac
@@ -299,6 +648,38 @@ impl GatewayOwner {
         }
         if old.model != new_cfg.model || old.embed != new_cfg.embed {
             report.provider = true;
+            if old.model != new_cfg.model
+                && new_cfg.model.provider != crate::config::ModelProviderKind::Scripted
+            {
+                // Scripted providers are injected by the embedder and cannot be rebuilt
+                // from config; every other provider is rebuilt live for the next request.
+                let secrets = crate::secrets::load_provider_secrets(
+                    Some(&self.secrets_path),
+                    |n| std::env::var(n).ok(),
+                )
+                .map_err(|e| AdminError::server(format!("failed to load secrets: {e}")))?;
+                if let Err(e) = self.handle.rebuild_model(&new_cfg, &secrets).await {
+                    self.runlog.warn(
+                        "provider",
+                        &format!("provider rebuild failed, previous provider kept: {e}"),
+                    );
+                    return Err(AdminError::server(format!(
+                        "config saved but the provider could not be rebuilt (previous provider kept): {e}"
+                    )));
+                }
+                self.runlog.info(
+                    "provider",
+                    &format!(
+                        "provider rebuilt: {} / {}",
+                        new_cfg
+                            .model
+                            .catalog_provider
+                            .as_deref()
+                            .unwrap_or_else(|| new_cfg.model.provider.as_str()),
+                        new_cfg.model.model
+                    ),
+                );
+            }
             let hook = self.provider_hook.lock().expect("provider hook lock").clone();
             match hook {
                 Some(h) => h(&new_cfg),
@@ -405,6 +786,50 @@ impl GatewayOwner {
         }
         json!({ "cancelled": n > 0 })
     }
+}
+
+/// Sets `[providers.<id>] api_key` in `secrets.toml`, keeping everything else, and leaves the
+/// file at mode `0600` (written to a private temporary file, then renamed into place).
+fn write_provider_key(path: &std::path::Path, id: &str, key: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    if raw.trim_start().starts_with('{') {
+        return Err(std::io::Error::other(
+            "secrets file is JSON; convert it to TOML to store provider keys",
+        ));
+    }
+    let mut doc: toml_edit::DocumentMut = raw
+        .parse()
+        .map_err(|e| std::io::Error::other(format!("secrets file is not valid TOML: {e}")))?;
+    if !doc.get("providers").is_some_and(Item::is_table_like) {
+        let mut t = toml_edit::Table::new();
+        t.set_implicit(true);
+        doc.insert("providers", Item::Table(t));
+    }
+    let providers = doc["providers"].as_table_like_mut().expect("providers table");
+    if !providers.get(id).is_some_and(Item::is_table_like) {
+        providers.insert(id, Item::Table(toml_edit::Table::new()));
+    }
+    providers
+        .get_mut(id)
+        .and_then(Item::as_table_like_mut)
+        .expect("provider table")
+        .insert("api_key", value(key));
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(doc.to_string().as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path)
 }
 
 fn merge_table(

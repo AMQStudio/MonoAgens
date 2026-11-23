@@ -11,28 +11,10 @@ use monoagens_gateway::{
 use monoagens_protocol::ActorId;
 use monoagens_reason::{LocalEmbedSidecar, ModelProvider};
 use monoagens_store::{SegmentedStore, StoreConfig};
-use monoagens_valve::{Valve, ValveConfig, ValveMode, ValveSnapshot};
+use monoagens_valve::{Valve, ValveSnapshot};
 use serde::Serialize;
 
-pub(crate) fn build_valve_config(cfg: &GatewayConfig) -> ValveConfig {
-    ValveConfig {
-        mode: match cfg.valve.mode.as_str() {
-            "partial" => ValveMode::Partial,
-            "off" => ValveMode::Off,
-            _ => ValveMode::Enforcing,
-        },
-        max_chain_wakes: cfg.valve.max_chain_wakes,
-        daily_token_budget: cfg.model.daily_token_budget,
-        rbac: cfg.rbac.clone(),
-        ..ValveConfig::default()
-    }
-}
-
-pub(crate) fn owner_actor_from_cfg(cfg: Option<&GatewayConfig>) -> ActorId {
-    cfg.and_then(|c| c.persons.iter().find(|p| p.is_owner))
-        .map(|p| p.actor_id.clone())
-        .unwrap_or_else(|| ActorId::new("per_owner"))
-}
+pub(crate) use monoagens_gateway::governance::{build_valve_config, owner_actor_from_cfg};
 
 pub(crate) fn load_paths(
     config_path: Option<&Path>,
