@@ -117,6 +117,10 @@ pub fn render_to_buffer(
         crate::views::draw(area, buf, &state.gov, &palette, state.prefs.icons);
     }
 
+    if modal_rect.is_none() {
+        crate::conv::render_overlays(area, feed_rect, buf, state, &palette);
+    }
+
     if let Some(toast) = &state.toast {
         render_toast(area, buf, &toast.text, toast.is_error, &palette, state.prefs.icons);
     }
@@ -263,10 +267,14 @@ fn render_sidebar(
 
     let mut rows: Vec<SidebarRow> = Vec::new();
     rows.push(SidebarRow::Header("💬 CHATS"));
-    for chat in &state.chats.chats {
+    for chat in crate::chat_search::visible_chats(
+        &state.chats,
+        &state.timelines,
+        state.conv.chat_filter.as_deref(),
+    ) {
         rows.push(SidebarRow::Chat {
             id: chat.id.clone(),
-            title: chat.title.clone(),
+            title: if chat.pinned { format!("★ {}", chat.title) } else { chat.title.clone() },
             active: chat.id == state.chats.active_chat_id,
         });
     }
@@ -612,7 +620,10 @@ fn render_chat_feed(
     }
 
     let mut rendered_lines: Vec<Line<'static>> = Vec::new();
-    for item in items {
+    // (first line, end line, timeline index) of each selectable message, for mouse clicks.
+    let mut message_spans: Vec<(usize, usize, usize)> = Vec::new();
+    for (item_idx, item) in items.iter().enumerate() {
+        let item_start = rendered_lines.len();
         match item {
             ChatTimelineItem::UserMessage {
                 sender,
@@ -731,7 +742,15 @@ fn render_chat_feed(
                 }
             }
         }
+        if crate::message_actions::message_text(item).is_some() {
+            message_spans.push((item_start, rendered_lines.len(), item_idx));
+        }
+        crate::conv::mark_selected(&mut rendered_lines[item_start..], state, item_idx, palette);
+        rendered_lines.extend(crate::conv::summary_lines(state, item_idx, content_w, palette));
     }
+
+    // Live draft preview of the running turn (dim, never part of the timeline).
+    rendered_lines.extend(state.conv.preview.lines(content_w, palette));
 
     for queued in state.turn.queued() {
         push_queued_bubble(&mut rendered_lines, &queued.text, content_w, state, palette);
@@ -782,6 +801,16 @@ fn render_chat_feed(
     } else {
         state.chat_scroll.min(max_scroll)
     };
+
+    for (start, end, idx) in message_spans {
+        let (from, to) = (start.max(scroll), end.min(scroll + visible_h));
+        if from < to {
+            hit.message_rows.push((
+                Rect::new(area.x, area.y + (from - scroll) as u16, area.width.saturating_sub(1), (to - from) as u16),
+                idx,
+            ));
+        }
+    }
 
     for (row_idx, line) in rendered_lines.iter().skip(scroll).take(visible_h).enumerate() {
         buf.set_line(

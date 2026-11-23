@@ -18,6 +18,7 @@ pub mod catalog;
 pub mod discovery;
 pub mod openai;
 pub mod scripted;
+pub(crate) mod sse;
 
 pub use openai::{
     DEFAULT_OUTPUT_LIMIT_PARAM, ExtraHeaderValue, OpenAiModelConfig, OpenAiModelProvider,
@@ -321,6 +322,19 @@ pub trait ModelProvider: Send + Sync {
 
     /// Executes a stateless model call under `request.timeout_ms`.
     fn invoke(&self, request: &ModelRequest) -> Result<ModelCallSuccess, ModelCallFailure>;
+
+    /// Like [`ModelProvider::invoke`], but a provider that can stream hands every text delta of
+    /// the model output to `on_text` while it arrives. The returned value is identical to what
+    /// `invoke` returns for the same output (same usage, same parsing); the callback is only an
+    /// observer. The default does not stream: it calls `invoke` and never calls `on_text`.
+    fn invoke_streaming(
+        &self,
+        request: &ModelRequest,
+        on_text: &mut dyn FnMut(&str),
+    ) -> Result<ModelCallSuccess, ModelCallFailure> {
+        let _ = on_text;
+        self.invoke(request)
+    }
 }
 
 /// Maps a non-success HTTP status code to a [`ProviderFailureClass`] (shared by HTTP dialects).

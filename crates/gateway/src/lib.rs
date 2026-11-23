@@ -18,6 +18,7 @@ pub mod lock;
 pub mod logging;
 pub mod owner;
 pub mod plugins;
+pub mod preview;
 pub mod prequeue;
 pub mod provider;
 pub mod runlog;
@@ -65,6 +66,7 @@ pub use plugins::{
     PluginBootPlan, PluginEnvContext, PluginStartupReport, SkippedPlugin, build_plugin_env,
     resolve_plugin_boot_order,
 };
+pub use preview::{DraftExtractor, PreviewEnd, PreviewEvent, PreviewHub, PreviewSubscription, draft_text_of};
 pub use prequeue::{
     EmbedInitError, PreQueueEnrichReport, PreQueueService, ToolRagHit, ToolRagIndex,
     ToolRagQueryResult, build_embedder_from_config, build_embedder_from_config_async,

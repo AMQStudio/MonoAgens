@@ -598,6 +598,17 @@ impl PreQueueService {
             .query(query_text, top_k)
     }
 
+    /// Embeds `text` as a document with the configured embedder (blocking). `None` when
+    /// embeddings are disabled or the embedder fails; used by the TUI's chat-title topic shift.
+    #[must_use]
+    pub fn embed_text_blocking(&self, text: &str) -> Option<Vec<f32>> {
+        let emb = self.embedder.0.as_ref()?;
+        match emb.embed(&EmbedInput::document(text)) {
+            Ok(Some(te)) => Some(te.values),
+            Ok(None) | Err(_) => None,
+        }
+    }
+
     /// Exports Core-compatible [`CapabilityCatalogEntry`] records stamped with
     /// `capability_schema_hash` and `t_d` embeddings.
     #[must_use]

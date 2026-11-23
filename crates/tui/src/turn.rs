@@ -117,6 +117,12 @@ impl TurnState {
         self.clock = clock;
     }
 
+    /// Current time on the turn clock (milliseconds).
+    #[must_use]
+    pub fn now_ms(&self) -> u64 {
+        self.clock.now_ms()
+    }
+
     /// Sequence number of the most recently started turn (0 before the first).
     #[must_use]
     pub const fn seq(&self) -> u64 {
@@ -174,6 +180,13 @@ impl TurnState {
             true
         } else {
             false
+        }
+    }
+
+    /// Starts the grace window over (a model call is still in flight, so the turn is not silent yet).
+    pub fn rearm_grace(&mut self) {
+        if self.finished_ms.is_some() {
+            self.finished_ms = Some(self.clock.now_ms());
         }
     }
 

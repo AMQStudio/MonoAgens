@@ -22,8 +22,8 @@ use monoagens_core::EventRecord;
 use monoagens_gateway::{
     AdminError, AdminServer, CAPABILITY_APPROVAL_PROMPT, ApprovalPromptRequest, Clock, CommandSpec,
     DataDirLock, DiagnosticSink, GatewayHandle, GatewayOwner, GatewayRuntime, LifecycleCueEvent,
-    LogEntry, PluginInfo, PluginState, PluginStateEvent, RunLog, RunLogLevel, SystemClock,
-    admin_socket_path,
+    LogEntry, PluginInfo, PluginState, PluginStateEvent, PreviewEvent, RunLog, RunLogLevel,
+    SystemClock, admin_socket_path,
 };
 use monoagens_protocol::{
     ActionExecuteParams, ActionExecuteResult, ActorId, ApprovalResolveParams, BodyDiscoverParams,
@@ -90,6 +90,8 @@ pub enum RuntimeEvent {
     Catalog(crate::catalog_ui::CatalogEvent),
     /// Result of a governance / observability admin call (`crate::views`).
     Gov(crate::views::GovResponse),
+    /// Conversation features: draft preview, trace/explain results, editor, cancel.
+    Conv(crate::conv::ConvEvent),
 }
 
 /// Page of the owner's event log.
@@ -178,6 +180,28 @@ pub trait GatewayClient: Send + Sync {
         Box::pin(async move {
             let _ = params;
             Err(ClientError::server(format!("{method}: not supported by this client")))
+        })
+    }
+    /// Subscribes the TUI to the owner-only draft preview of its own turns (`preview.subscribe`);
+    /// drafts arrive as `RuntimeEvent::Conv(ConvEvent::Preview(..))`. Returns the subscription id.
+    fn preview_subscribe(&self, tx: mpsc::UnboundedSender<RuntimeEvent>) -> Fut<'_, ClientResult<u64>> {
+        Box::pin(async move {
+            let _ = tx;
+            Err(ClientError::server("preview.subscribe: not supported by this client"))
+        })
+    }
+    /// Ends a draft preview subscription.
+    fn preview_unsubscribe(&self, id: u64) -> Fut<'_, ClientResult<()>> {
+        Box::pin(async move {
+            let _ = id;
+            Ok(())
+        })
+    }
+    /// Embeds `text` with the gateway's embedder (`None` without one), for chat-title topic shift.
+    fn embed_text(&self, text: String) -> Fut<'_, Option<Vec<f32>>> {
+        Box::pin(async move {
+            let _ = text;
+            None
         })
     }
 }
@@ -464,6 +488,8 @@ pub struct InProcessClient {
     clock: Arc<SystemClock>,
     dynamic_actors: Arc<Mutex<BTreeSet<ActorId>>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Forwarders of draft preview subscriptions, by subscription id.
+    preview_tasks: Mutex<HashMap<u64, JoinHandle<()>>>,
     _embed_sidecar: Option<LocalEmbedSidecar>,
 }
 
@@ -542,6 +568,7 @@ impl InProcessClient {
             clock: parts.clock,
             dynamic_actors: parts.dynamic_actors,
             tasks: Mutex::new(tasks),
+            preview_tasks: Mutex::new(HashMap::new()),
             _embed_sidecar: parts.embed_sidecar,
         })
     }
@@ -700,6 +727,43 @@ impl GatewayClient for InProcessClient {
         })
     }
 
+    fn preview_subscribe(&self, tx: mpsc::UnboundedSender<RuntimeEvent>) -> Fut<'_, ClientResult<u64>> {
+        Box::pin(async move {
+            let mut sub = self.handle.preview().subscribe();
+            let id = sub.id();
+            let task = tokio::spawn(async move {
+                while let Some(ev) = sub.recv().await {
+                    if tx.send(RuntimeEvent::Conv(crate::conv::ConvEvent::Preview(ev))).is_err() {
+                        break;
+                    }
+                }
+            });
+            self.preview_tasks.lock().expect("preview tasks lock").insert(id, task);
+            Ok(id)
+        })
+    }
+
+    fn preview_unsubscribe(&self, id: u64) -> Fut<'_, ClientResult<()>> {
+        Box::pin(async move {
+            // Aborting the forwarder drops the subscription, which removes it from the hub.
+            if let Some(t) = self.preview_tasks.lock().expect("preview tasks lock").remove(&id) {
+                t.abort();
+            }
+            self.handle.preview().unsubscribe(id);
+            Ok(())
+        })
+    }
+
+    fn embed_text(&self, text: String) -> Fut<'_, Option<Vec<f32>>> {
+        Box::pin(async move {
+            let pq = self.handle.pre_queue_service()?.clone();
+            tokio::task::spawn_blocking(move || pq.embed_text_blocking(&text))
+                .await
+                .ok()
+                .flatten()
+        })
+    }
+
     fn shutdown(&self) -> Fut<'_, ()> {
         Box::pin(async move {
             self.owner.supervisor().shutdown().await;
@@ -785,6 +849,9 @@ impl SocketClient {
                             .ok()
                             .map(|e| plugin_event(&e)),
                         "cues.event" => serde_json::from_value(params).ok().map(RuntimeEvent::Cue),
+                        "preview.event" => serde_json::from_value::<PreviewEvent>(params)
+                            .ok()
+                            .map(|e| RuntimeEvent::Conv(crate::conv::ConvEvent::Preview(e))),
                         _ => None,
                     };
                     if let Some(ev) = ev {
@@ -1061,6 +1128,23 @@ impl GatewayClient for SocketClient {
 
     fn gov_call(&self, method: String, params: Value) -> Fut<'_, ClientResult<Value>> {
         Box::pin(async move { self.call(&method, params).await })
+    }
+
+    fn preview_subscribe(&self, tx: mpsc::UnboundedSender<RuntimeEvent>) -> Fut<'_, ClientResult<u64>> {
+        Box::pin(async move {
+            // Drafts arrive on this connection as `preview.event` notifications (see the reader).
+            let _ = tx;
+            let v = self.call("preview.subscribe", json!({})).await?;
+            v.get("subscription")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ClientError::server("preview.subscribe: no subscription id"))
+        })
+    }
+
+    fn preview_unsubscribe(&self, id: u64) -> Fut<'_, ClientResult<()>> {
+        Box::pin(async move {
+            self.call("preview.unsubscribe", json!({ "subscription": id })).await.map(|_| ())
+        })
     }
 
     fn shutdown(&self) -> Fut<'_, ()> {

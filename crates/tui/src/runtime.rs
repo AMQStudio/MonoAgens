@@ -63,7 +63,7 @@ use crate::render::render_to_buffer;
 use crate::settings::{PluginUiState, SecretsUiSummary, SetupWizardState, ValveRuleTogglesState};
 use crate::state::{AppAction, ChatTimelineItem, HitRegions, PendingApprovalCard, TuiAppState};
 use crate::titler::{
-    TitleTrigger, extract_topic_ngrams, generate_chat_title, should_request_title,
+    TitleTrigger, extract_topic_ngrams, run_titler, should_request_title_with_embeddings, should_request_title,
 };
 
 /// Options controlling [`run_tui`] startup.
@@ -327,9 +327,11 @@ fn suspend_process(guard: &mut TerminalGuard) {
 pub(crate) struct TurnTracker {
     events: HashMap<u64, u64>,
     actions: HashMap<String, u64>,
+    /// Percept event of each turn (the root of its trace).
+    roots: HashMap<u64, u64>,
 }
 
-const TURN_CORRELATION_PREFIX: &str = "tui-turn-";
+pub(crate) const TURN_CORRELATION_PREFIX: &str = "tui-turn-";
 
 impl TurnTracker {
     fn observe(&mut self, ev: &EventRecord) {
@@ -349,10 +351,18 @@ impl TurnTracker {
         let Some(turn) = turn else {
             return;
         };
+        if matches!(&ev.detail, Some(EventDetail::PerceptMeta { .. })) {
+            self.roots.entry(turn).or_insert(ev.id.0);
+        }
         self.events.insert(ev.id.0, turn);
         if let Some(EventDetail::Action { action_id, .. }) = &ev.detail {
             self.actions.insert(action_id.as_str().to_owned(), turn);
         }
+    }
+
+    /// Percept event that started `turn`, when the log already shows it.
+    pub(crate) fn root_of_turn(&self, turn: u64) -> Option<u64> {
+        self.roots.get(&turn).copied()
     }
 
     /// Turn that caused `action_id`, when the log already shows it.
@@ -363,10 +373,10 @@ impl TurnTracker {
 
 /// Mutable bookkeeping of the event loop that follows the gateway's event log.
 #[derive(Default)]
-struct LogFollower {
+pub(crate) struct LogFollower {
     seen_len: usize,
     resolved_approvals: BTreeSet<ActionId>,
-    tracker: TurnTracker,
+    pub(crate) tracker: TurnTracker,
 }
 
 /// Everything the event loop needs to boot (or re-boot) the gateway connection.
@@ -582,6 +592,17 @@ async fn run_tui_event_loop(
                 }
                 if state.is_busy() {
                     effects.advance_tick();
+                    // The owner step returns before a model call finishes: a turn whose model is
+                    // still thinking is not silent, so the grace window starts over.
+                    if state.turn.grace_expired()
+                        && state.turn_effects > 0
+                        && let Some(c) = &client
+                        && let Ok(st) = c.status().await
+                        && (st["model_calls_in_flight"].as_u64().unwrap_or(0) > 0
+                            || st["queue_depth"].as_u64().unwrap_or(0) > 0)
+                    {
+                        state.turn.rearm_grace();
+                    }
                     let turn_seq = state.turn.seq();
                     if state.tick_turn() {
                         if let Some(c) = &client {
@@ -624,6 +645,9 @@ async fn run_tui_event_loop(
             )
             .await;
         }
+
+        // Conversation housekeeping: trace fetches, preview subscription, notification bytes.
+        crate::conv::pump(state, &client, &tx);
     }
 
     if let Some(c) = client {
@@ -693,11 +717,37 @@ async fn handle_app_action(
             attachments,
         } => {
             *active_turn_chat_id = Some(chat_id.clone());
-            // Check non-blocking background auto-titler
+            // Background auto-titler. With an embedder the topic shift is the cosine against the
+            // chat's stored centroid; without one the n-gram Jaccard rule decides.
+            let user_embedding = match client.as_ref() {
+                Some(c) if state.prefs.auto_chat_title => {
+                    tokio::time::timeout(Duration::from_secs(2), c.embed_text(text.clone()))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                _ => None,
+            };
             let trigger = {
+                let auto = state.prefs.auto_chat_title;
                 let chat = state.chats.active_chat_mut();
-                let trig = should_request_title(chat, &text, state.prefs.auto_chat_title);
+                let centroid = chat.topic_centroid();
+                let trig = if user_embedding.is_some() && centroid.is_some() {
+                    should_request_title_with_embeddings(
+                        chat,
+                        &text,
+                        user_embedding.as_deref(),
+                        centroid.as_deref(),
+                        auto,
+                    )
+                } else {
+                    should_request_title(chat, &text, auto)
+                };
                 chat.turns_since_retitle = chat.turns_since_retitle.saturating_add(1);
+                if let Some(emb) = &user_embedding {
+                    let n = chat.turns_since_retitle.max(1);
+                    chat.update_topic_centroid(emb, n);
+                }
                 let kw = extract_topic_ngrams(&text);
                 if chat.topic_ngrams.is_empty() {
                     chat.topic_ngrams = kw;
@@ -722,13 +772,27 @@ async fn handle_app_action(
                     None
                 };
                 let recent = vec![text.clone()];
+                let first_message = text.clone();
+                let classify_limit = state.gateway_cfg.model.output_limits.classify;
                 let new_kw = extract_topic_ngrams(&text);
                 let tx_title = tx.clone();
                 let cid = chat_id.clone();
+                let c_log = Arc::clone(c);
                 tokio::task::spawn_blocking(move || {
-                    if let Some(title) =
-                        generate_chat_title(&tp, &model, cur_title.as_deref(), &recent)
-                    {
+                    let mut failures = Vec::new();
+                    let title = run_titler(
+                        &tp,
+                        &model,
+                        cur_title.as_deref(),
+                        &recent,
+                        classify_limit,
+                        &first_message,
+                        &mut |m| failures.push(m.to_owned()),
+                    );
+                    for f in failures {
+                        c_log.log(RunLogLevel::Warn, "titler", &format!("chat title request failed: {f}"));
+                    }
+                    if let Some(title) = title {
                         let _ = tx_title.send(RuntimeEvent::ChatTitleReady {
                             chat_id: cid,
                             title,
@@ -784,6 +848,11 @@ async fn handle_app_action(
             });
         }
         AppAction::Gov(req) => crate::views::spawn(client, tx, req),
+        AppAction::Conv(conv_action) => {
+            if crate::conv::run_action(conv_action, state, guard, client, tx).await {
+                needs_full_redraw = Redraw::ClearAndDrain;
+            }
+        }
         AppAction::ResolveApproval {
             action_id,
             h_act,
@@ -981,7 +1050,7 @@ fn reload_config(
     }
 }
 
-fn handle_runtime_event(
+pub(crate) fn handle_runtime_event(
     rt_ev: RuntimeEvent,
     state: &mut TuiAppState,
     active_turn_chat_id: &mut Option<String>,
@@ -998,13 +1067,17 @@ fn handle_runtime_event(
             action_id,
         } => {
             let turn = action_id.as_deref().and_then(|a| tracker.turn_of_action(a));
+            let reply_text = text.clone();
             let disposition = state.on_assistant_reply(turn, chat_id, text, duration_ms);
             if disposition == crate::state::ReplyDisposition::CurrentTurn {
                 *active_turn_chat_id = None;
             }
+            let turn_no = turn.unwrap_or_else(|| state.turn.seq());
+            state.conv_after_reply(turn_no, tracker.root_of_turn(turn_no), &reply_text);
             effects.trigger_message_fade_in(state.prefs.motion, &palette);
         }
         RuntimeEvent::ApprovalPrompt(card) => {
+            state.conv_on_approval(&card.summary);
             state.pending_approval = Some(card);
         }
         RuntimeEvent::TurnError { turn, error } => {
@@ -1055,6 +1128,7 @@ fn handle_runtime_event(
             }
         }
         RuntimeEvent::Gov(_) => {}
+        RuntimeEvent::Conv(ev) => state.conv_event(ev),
         RuntimeEvent::Log(entry) => state.on_log_entry(entry),
         RuntimeEvent::Cue(cue) => {
             state.thinking_phase = match cue.kind {
@@ -1107,7 +1181,7 @@ fn handle_runtime_event(
     }
 }
 
-async fn poll_new_gateway_events(
+pub(crate) async fn poll_new_gateway_events(
     client: &Arc<dyn GatewayClient>,
     state: &mut TuiAppState,
     follower: &mut LogFollower,
@@ -1133,7 +1207,7 @@ async fn poll_new_gateway_events(
     follower.seen_len = page.total;
 }
 
-fn process_event(
+pub(crate) fn process_event(
     ev: &EventRecord,
     state: &mut TuiAppState,
     resolved_approvals: &mut BTreeSet<ActionId>,
@@ -1187,8 +1261,13 @@ fn process_event(
                     },
                 );
             }
+            EventDetail::Failure { detail, .. } if detail == monoagens_gateway::CANCELLED_BY_OWNER => {
+                // The owner's own interrupt: the cancel result already ended the turn and
+                // showed "Interrupted."; this recorded failure must not end a later turn.
+            }
             EventDetail::Failure { component, detail, .. } => {
                 state.finish_busy();
+                state.conv_mark_turn_error();
                 *active_turn_chat_id = None;
                 let text = crate::catalog_ui::provider_failure_notice(component, detail)
                     .unwrap_or_else(|| format!("[{component}] {detail}"));
@@ -1203,12 +1282,19 @@ fn process_event(
             _ => {}
         }
     }
+    if let Some(EventDetail::DoorVerdict { rule, verdict, .. }) = &ev.detail
+        && ev.kind == EventKind::DoorVerdict
+    {
+        // A draft shown for this turn is replaced by the verdict (held or denied).
+        state.conv_on_valve_verdict(rule, verdict);
+    }
     if ev.kind == EventKind::DoorVerdict
         && let Ok(rec) = serde_json::from_slice::<ApprovalLogRecord>(ev.payload.as_bytes())
     {
         match rec {
             ApprovalLogRecord::Held { pending, .. } => {
                 if !resolved_approvals.contains(&pending.action_id) {
+                    state.conv_on_approval(pending.capability_id.as_str());
                     state.pending_approval = Some(PendingApprovalCard {
                         action_id: pending.action_id,
                         h_act: pending.h_act,
@@ -1475,7 +1561,7 @@ fn owner_actor_from_cfg(cfg: Option<&GatewayConfig>) -> ActorId {
         .unwrap_or_else(|| ActorId::new("per_owner"))
 }
 
-fn build_tui_percept(
+pub(crate) fn build_tui_percept(
     state: &TuiAppState,
     owner_actor: &ActorId,
     text: &str,

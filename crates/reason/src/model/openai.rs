@@ -446,6 +446,28 @@ impl ModelProvider for OpenAiModelProvider {
     }
 
     fn invoke(&self, request: &ModelRequest) -> Result<ModelCallSuccess, ModelCallFailure> {
+        self.invoke_inner(request, None)
+    }
+
+    fn invoke_streaming(
+        &self,
+        request: &ModelRequest,
+        on_text: &mut dyn FnMut(&str),
+    ) -> Result<ModelCallSuccess, ModelCallFailure> {
+        self.invoke_inner(request, Some(on_text))
+    }
+}
+
+impl OpenAiModelProvider {
+    /// Shared body of `invoke` and `invoke_streaming`: with a sink the request asks for SSE
+    /// (`stream: true`, usage in the final chunk) and the chunks are folded back into the
+    /// blocking envelope, so everything after the read is the same code path.
+    #[allow(clippy::too_many_lines)]
+    fn invoke_inner(
+        &self,
+        request: &ModelRequest,
+        mut stream: Option<&mut dyn FnMut(&str)>,
+    ) -> Result<ModelCallSuccess, ModelCallFailure> {
         let start = Instant::now();
         let timeout_ms = if request.timeout_ms > 0 {
             request.timeout_ms
@@ -562,6 +584,10 @@ impl ModelProvider for OpenAiModelProvider {
                     );
                 }
             }
+            if stream.is_some() {
+                obj.insert("stream".to_owned(), json!(true));
+                obj.insert("stream_options".to_owned(), json!({ "include_usage": true }));
+            }
             obj.insert(limit_param.to_owned(), json!(effective_limit));
             if let Some(temp) = request.temperature {
                 obj.insert("temperature".to_owned(), json!(temp));
@@ -635,7 +661,30 @@ impl ModelProvider for OpenAiModelProvider {
                     if status.as_u16() == 429 {
                         self.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
                     }
-                    match resp.text() {
+                    let mut emitted_text = false;
+                    // A server that ignores `stream: true` answers a plain JSON body: read it as such.
+                    let is_event_stream = resp
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v.to_ascii_lowercase().contains("text/event-stream"));
+                    let body_result: Result<String, (bool, String)> = match stream.as_deref_mut() {
+                        Some(sink) if status.is_success() && is_event_stream => {
+                            let mut folder = crate::model::sse::ChatStreamFolder::new(sink);
+                            let read = crate::model::sse::read_sse(resp, |d| folder.feed(d));
+                            let folded = folder.finish();
+                            emitted_text = folded.emitted_text;
+                            match read {
+                                Ok(()) => Ok(folded.envelope.to_string()),
+                                Err(e) => Err((
+                                    e.kind() == std::io::ErrorKind::TimedOut,
+                                    e.to_string(),
+                                )),
+                            }
+                        }
+                        _ => resp.text().map_err(|e| (e.is_timeout(), e.to_string())),
+                    };
+                    match body_result {
                         Ok(body) => {
                             let code = status.as_u16();
                             let transient =
@@ -654,8 +703,8 @@ impl ModelProvider for OpenAiModelProvider {
                             }
                             break (status, body);
                         }
-                        Err(err) => {
-                            if attempt < self.config.max_retries {
+                        Err((timed_out, detail)) => {
+                            if attempt < self.config.max_retries && !emitted_text {
                                 attempt += 1;
                                 self.retries_total.fetch_add(1, Ordering::Relaxed);
                                 let delay_ms = (1_000_u64 << (attempt - 1)).min(30_000);
@@ -663,7 +712,7 @@ impl ModelProvider for OpenAiModelProvider {
                                 continue;
                             }
                             let latency_ms = start.elapsed().as_millis() as u64;
-                            let class = if err.is_timeout() {
+                            let class = if timed_out {
                                 ProviderFailureClass::Timeout
                             } else {
                                 ProviderFailureClass::Server
@@ -673,7 +722,7 @@ impl ModelProvider for OpenAiModelProvider {
                                 class,
                                 Some(status.as_u16()),
                                 latency_ms,
-                                &err.to_string(),
+                                &detail,
                             ));
                         }
                     }

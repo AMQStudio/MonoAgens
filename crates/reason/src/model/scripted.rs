@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::model::{
     CallOutcome, ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelProvider, ModelRequest,
@@ -61,6 +63,11 @@ impl ScriptedReply {
 pub struct ScriptedModelProvider {
     queue: Mutex<VecDeque<ScriptedReply>>,
     fallback: Option<ScriptedReply>,
+    /// Bytes per text delta when asked to stream (rounded up to a char boundary).
+    stream_chunk_bytes: usize,
+    /// Pause after each streamed delta, to make a turn observably slow in tests and smoke runs.
+    stream_delay_ms: u64,
+    streamed_calls: AtomicU64,
 }
 
 impl Default for ScriptedModelProvider {
@@ -73,19 +80,38 @@ impl ScriptedModelProvider {
     /// Creates an empty [`ScriptedModelProvider`].
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            queue: Mutex::new(VecDeque::new()),
-            fallback: None,
-        }
+        Self::with_queue(VecDeque::new())
     }
 
     /// Creates a [`ScriptedModelProvider`] pre-loaded with sequential replies.
     #[must_use]
     pub fn from_replies(replies: impl IntoIterator<Item = ScriptedReply>) -> Self {
+        Self::with_queue(replies.into_iter().collect())
+    }
+
+    fn with_queue(queue: VecDeque<ScriptedReply>) -> Self {
         Self {
-            queue: Mutex::new(replies.into_iter().collect()),
+            queue: Mutex::new(queue),
             fallback: None,
+            stream_chunk_bytes: 16,
+            stream_delay_ms: 0,
+            streamed_calls: AtomicU64::new(0),
         }
+    }
+
+    /// Sets how a streamed call paces its text deltas: `chunk_bytes` per delta and
+    /// `delay_ms` of sleep after each.
+    #[must_use]
+    pub fn with_stream_pacing(mut self, chunk_bytes: usize, delay_ms: u64) -> Self {
+        self.stream_chunk_bytes = chunk_bytes.max(1);
+        self.stream_delay_ms = delay_ms;
+        self
+    }
+
+    /// Number of calls made through `invoke_streaming` (a request that asked for streaming).
+    #[must_use]
+    pub fn streamed_calls(&self) -> u64 {
+        self.streamed_calls.load(Ordering::SeqCst)
     }
 
     /// Appends a prepared reply to the queue.
@@ -105,6 +131,37 @@ impl ScriptedModelProvider {
 impl ModelProvider for ScriptedModelProvider {
     fn provider_name(&self) -> &str {
         "scripted"
+    }
+
+    fn invoke_streaming(
+        &self,
+        request: &ModelRequest,
+        on_text: &mut dyn FnMut(&str),
+    ) -> Result<ModelCallSuccess, ModelCallFailure> {
+        self.streamed_calls.fetch_add(1, Ordering::SeqCst);
+        let upcoming = self
+            .queue
+            .lock()
+            .expect("scripted provider queue mutex")
+            .front()
+            .cloned()
+            .or_else(|| self.fallback.clone());
+        if let Some(ScriptedReply::RawText { text, .. }) = upcoming {
+            let mut rest = text.as_str();
+            while !rest.is_empty() {
+                let mut cut = self.stream_chunk_bytes.min(rest.len());
+                while !rest.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                let (head, tail) = rest.split_at(cut);
+                on_text(head);
+                rest = tail;
+                if self.stream_delay_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(self.stream_delay_ms));
+                }
+            }
+        }
+        self.invoke(request)
     }
 
     fn invoke(&self, request: &ModelRequest) -> Result<ModelCallSuccess, ModelCallFailure> {

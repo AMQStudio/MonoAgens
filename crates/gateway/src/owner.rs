@@ -278,6 +278,7 @@ impl GatewayOwner {
                 "reason": p.reason,
             })).collect::<Vec<_>>(),
             "queue_depth": self.handle.ingress().len(),
+            "model_calls_in_flight": self.handle.in_flight_model_calls(),
             "budget": self.budget_json(),
         })
     }

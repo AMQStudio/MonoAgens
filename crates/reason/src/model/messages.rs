@@ -201,13 +201,38 @@ impl ModelProvider for MessagesModelProvider {
     }
 
     fn invoke(&self, request: &ModelRequest) -> Result<ModelCallSuccess, ModelCallFailure> {
+        self.invoke_inner(request, None)
+    }
+
+    fn invoke_streaming(
+        &self,
+        request: &ModelRequest,
+        on_text: &mut dyn FnMut(&str),
+    ) -> Result<ModelCallSuccess, ModelCallFailure> {
+        self.invoke_inner(request, Some(on_text))
+    }
+}
+
+impl MessagesModelProvider {
+    /// Shared body of `invoke` and `invoke_streaming` (see the openai dialect): with a sink the
+    /// request asks for streaming events, which are folded back into the blocking envelope.
+    fn invoke_inner(
+        &self,
+        request: &ModelRequest,
+        stream: Option<&mut dyn FnMut(&str)>,
+    ) -> Result<ModelCallSuccess, ModelCallFailure> {
         let start = Instant::now();
         let timeout_ms = if request.timeout_ms > 0 {
             request.timeout_ms
         } else {
             self.config.default_timeout_ms
         };
-        let payload = self.build_payload(request);
+        let mut payload = self.build_payload(request);
+        if stream.is_some()
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("stream".to_owned(), json!(true));
+        }
         let mut req = self
             .client
             .post(&self.config.endpoint_url)
@@ -234,20 +259,47 @@ impl ModelProvider for MessagesModelProvider {
             )
         })?;
         let status = resp.status();
-        let body = resp.text().map_err(|err| {
-            let class = if err.is_timeout() {
-                ProviderFailureClass::Timeout
-            } else {
-                ProviderFailureClass::Server
-            };
-            self.failure(
-                request,
-                class,
-                Some(status.as_u16()),
-                start.elapsed().as_millis() as u64,
-                &err.to_string(),
-            )
-        })?;
+        let is_event_stream = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.to_ascii_lowercase().contains("text/event-stream"));
+        let body = match stream {
+            Some(sink) if status.is_success() && is_event_stream => {
+                let mut folder = crate::model::sse::MessagesStreamFolder::new(sink);
+                let read = crate::model::sse::read_sse(resp, |d| folder.feed(d));
+                let folded = folder.finish();
+                read.map_err(|err| {
+                    let class = if err.kind() == std::io::ErrorKind::TimedOut {
+                        ProviderFailureClass::Timeout
+                    } else {
+                        ProviderFailureClass::Server
+                    };
+                    self.failure(
+                        request,
+                        class,
+                        Some(status.as_u16()),
+                        start.elapsed().as_millis() as u64,
+                        &err.to_string(),
+                    )
+                })?;
+                folded.envelope.to_string()
+            }
+            _ => resp.text().map_err(|err| {
+                let class = if err.is_timeout() {
+                    ProviderFailureClass::Timeout
+                } else {
+                    ProviderFailureClass::Server
+                };
+                self.failure(
+                    request,
+                    class,
+                    Some(status.as_u16()),
+                    start.elapsed().as_millis() as u64,
+                    &err.to_string(),
+                )
+            })?,
+        };
         let latency_ms = start.elapsed().as_millis() as u64;
         if !status.is_success() {
             let code = status.as_u16();

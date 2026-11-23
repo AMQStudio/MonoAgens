@@ -377,6 +377,8 @@ pub struct HitRegions {
     pub settings_sections: Vec<(Rect, usize)>,
     pub settings_options: Vec<(Rect, usize)>,
     pub wizard_buttons: Vec<(Rect, usize)>,
+    /// Visible rows of each selectable message of the chat feed (timeline index).
+    pub message_rows: Vec<(Rect, usize)>,
 }
 
 impl HitRegions {
@@ -405,6 +407,7 @@ impl HitRegions {
         self.settings_sections.clear();
         self.settings_options.clear();
         self.wizard_buttons.clear();
+        self.message_rows.clear();
     }
 }
 
@@ -447,6 +450,8 @@ pub enum AppAction {
     Catalog(crate::catalog_ui::CatalogAction),
     /// A governance / observability admin call for the panels in `crate::views`.
     Gov(crate::views::GovRequest),
+    /// Conversation work for the async runtime (interrupt, editor, trace, preview).
+    Conv(crate::conv::ConvAction),
 }
 
 /// Result of feeding one terminal event to [`TuiAppState::handle_terminal_event`].
@@ -511,6 +516,9 @@ pub struct TuiAppState {
     pub turn_effects: usize,
     /// `/approvals`, `/people`, `/policy`, `/activity`, `/events` and `/status` panels.
     pub gov: crate::views::GovState,
+    /// Conversation features: interrupt/retry, history search, what-happened, notifications,
+    /// draft preview (see `crate::conv`).
+    pub conv: crate::conv::ConvState,
 }
 
 impl TuiAppState {
@@ -597,6 +605,7 @@ impl TuiAppState {
             gateway_link: String::new(),
             turn_effects: 0,
             gov: crate::views::GovState::default(),
+            conv: crate::conv::ConvState::default(),
         };
         app.filter_autocomplete();
         app
@@ -663,8 +672,12 @@ impl TuiAppState {
             }),
             _ => None,
         };
+        let is_reply = matches!(item, ChatTimelineItem::AssistantMessage { .. });
         let entry = self.timelines.entry(chat_id.to_owned()).or_default();
         entry.push(item);
+        if is_reply {
+            self.conv.last_reply = Some((chat_id.to_owned(), entry.len() - 1));
+        }
         if let Some(msg) = persist_msg {
             self.chats.append_message(chat_id, msg);
             self.persist_chats();
@@ -983,6 +996,28 @@ impl TuiAppState {
             });
         }
 
+        for (name, usage, description, icon) in [
+            ("why", "/why", "Explain the valve decision behind the latest reply", "?"),
+            ("export", "/export [path]", "Write this chat as Markdown (default <data_dir>/exports/)", "⇩"),
+            ("chat", "/chat pin | search <text>", "Pin the chat, or filter the chat list by title and text", "≡"),
+            ("notify", "/notify off|bell|desktop|both", "Notify when unfocused and a reply arrives", "♪"),
+            ("preview", "/preview on|off", "Show the reply draft while the model writes", "…"),
+        ] {
+            cmds.push(SlashCommandItem {
+                name: name.to_owned(),
+                usage: usage.to_owned(),
+                description: description.to_owned(),
+                current_value: match name {
+                    "notify" => Some(self.prefs.conv.notifications.label().to_owned()),
+                    "preview" => Some(if self.prefs.conv.live_draft_preview { "on" } else { "off" }.to_owned()),
+                    _ => None,
+                },
+                icon,
+                lab_only: false,
+                from_plugin: None,
+            });
+        }
+
         for spec in &self.gateway_commands {
             if cmds.iter().any(|c| c.name == spec.name) {
                 continue;
@@ -1223,12 +1258,18 @@ impl TuiAppState {
                 redraw: true,
                 clear: false,
             },
-            Event::FocusGained => EventOutcome {
-                actions: Vec::new(),
-                redraw: true,
-                clear: true,
-            },
-            Event::FocusLost => EventOutcome::default(),
+            Event::FocusGained => {
+                self.conv_focus(true);
+                EventOutcome {
+                    actions: Vec::new(),
+                    redraw: true,
+                    clear: true,
+                }
+            }
+            Event::FocusLost => {
+                self.conv_focus(false);
+                EventOutcome::default()
+            }
         }
     }
 
@@ -1236,6 +1277,11 @@ impl TuiAppState {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Vec<AppAction> {
         let mut actions = Vec::new();
         self.selection = None;
+
+        // Conversation keys (interrupt, history search, editor, retry, message actions)
+        if let Some(handled) = self.conv_key(key) {
+            return handled;
+        }
 
         // Global Ctrl+C / Ctrl+Q exit
         if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1481,7 +1527,7 @@ impl TuiAppState {
     }
 
     /// Pushes the user bubble, marks the turn busy and returns the action that submits it.
-    fn begin_user_turn(
+    pub(crate) fn begin_user_turn(
         &mut self,
         chat_id: String,
         place_id: String,
@@ -1507,6 +1553,7 @@ impl TuiAppState {
         self.thinking_phase = "Reasoning…".to_owned();
         self.thinking_elapsed_ms = 0;
         self.turn.begin(&chat_id);
+        self.conv_on_turn_begin(&chat_id, &place_id, &text, &attachments);
 
         AppAction::SendUserMessage {
             chat_id,
@@ -1597,6 +1644,7 @@ impl TuiAppState {
     pub fn finish_busy(&mut self) {
         self.thinking = false;
         self.turn.end();
+        self.conv_on_busy_end();
     }
 
     /// Records that the owner step of turn `seq` returned; a reply may still follow within the
@@ -1615,6 +1663,7 @@ impl TuiAppState {
         }
         let chat = self.turn.chat_id().map(str::to_owned);
         self.finish_busy();
+        self.conv_mark_turn_error();
         chat
     }
 
@@ -1693,6 +1742,10 @@ impl TuiAppState {
         let cmd = parts.next().unwrap_or("");
         let rest = parts.collect::<Vec<_>>().join(" ");
         let active_id = self.chats.active_chat_id.clone();
+
+        if let Some(handled) = self.conv_slash(cmd, &rest) {
+            return handled;
+        }
 
         match cmd {
             "/exit" | "/quit" | "/q" => {
@@ -2317,6 +2370,10 @@ impl TuiAppState {
                     && sel.dragging
                 {
                     sel.dragging = false;
+                    if sel.anchor == sel.current {
+                        // A click without a drag selects the message under the pointer.
+                        self.conv_click_message(hit, sel.current.0, sel.current.1);
+                    }
                     if sel.anchor != sel.current {
                         let selected = extract_selected_text(hit, sel.anchor, sel.current);
                         if !selected.is_empty() {

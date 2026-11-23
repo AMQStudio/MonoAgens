@@ -6,7 +6,9 @@
 # Checks: composer, /model picker with search, plugin autostart dot (green), `/log` shows the plugin
 # stderr line, crash -> red -> green after restart, silent-turn notice, a spoken reply, attach to
 # `monoagens serve`, the governance panels (/status, /approvals, /events, /activity, /policy)
-# against the attached daemon, and detach leaving serve running.
+# against the attached daemon, and detach leaving serve running. Conversation checks
+# (`tui-conversation`): live draft bubble from a delayed SSE stream, Esc Esc interrupt and F5 retry,
+# Ctrl+O what-happened block, /why, Ctrl+R history search, /export.
 #
 # Usage: scripts/tui-smoke.sh   (after `cargo build -p monoagens-cli`; the fake plugin is built on
 # demand with `cargo build --example fake_plugin -p monoagens-gateway`)
@@ -153,8 +155,13 @@ json.dump({"protocol_version": v, "acts": [think]}, open(home + "/silent.json", 
 PY
 cp "$HOME_DIR/silent.json" "$HOME_DIR/reply.json"
 cat > "$HOME_DIR/fake_provider.py" <<'PY'
-import http.server, json, os, sys
+import http.server, json, os, sys, time
 home = sys.argv[1]
+def knob(name, default=0.0):
+    try:
+        return float(open(os.path.join(home, name)).read().strip())
+    except Exception:
+        return default
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def _send(self, code, body):
@@ -167,12 +174,33 @@ class H(http.server.BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        try:
+            streaming = json.loads(raw).get("stream") is True
+        except Exception:
+            streaming = False
+        open(os.path.join(home, "stream.log"), "a").write("stream\n" if streaming else "blocking\n")
+        time.sleep(knob("delay"))  # the "slow model" for the interrupt check
         content = open(os.path.join(home, "reply.json")).read()
-        self._send(200, {"id": "x", "object": "chat.completion",
-                         "choices": [{"index": 0, "finish_reason": "stop",
-                                      "message": {"role": "assistant", "content": content}}],
-                         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
+        if not streaming:
+            self._send(200, {"id": "x", "object": "chat.completion",
+                             "choices": [{"index": 0, "finish_reason": "stop",
+                                          "message": {"role": "assistant", "content": content}}],
+                             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
+            return
+        self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+        step = int(knob("chunk", 12))
+        for i in range(0, len(content), step):
+            chunk = {"id": "x", "object": "chat.completion.chunk",
+                     "choices": [{"index": 0, "delta": {"content": content[i:i + step]}, "finish_reason": None}]}
+            self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode()); self.wfile.flush()
+            time.sleep(knob("stream_delay"))
+        fin = {"id": "x", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+        use = {"id": "x", "object": "chat.completion.chunk", "choices": [],
+               "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+        for c in (fin, use):
+            self.wfile.write(("data: " + json.dumps(c) + "\n\n").encode())
+        self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(home, "port"), "w").write(str(srv.server_address[1]))
 srv.serve_forever()
@@ -260,6 +288,68 @@ tmux send-keys -t "$SESSION" "say something" Enter
 wait_for "pong smoke" 25
 echo "ok: reply rendered"
 
+# 5b. Ctrl+O expands the what-happened block of that turn; /why shows the valve explanation
+tmux send-keys -t "$SESSION" C-o
+wait_for "what happened"
+wait_for "chat.speak"
+echo "ok: Ctrl+O expands the what-happened block"
+tmux send-keys -t "$SESSION" "/why" Enter
+wait_for "decision event="
+echo "ok: /why shows the valve explanation"
+close_overlay "decision event="
+
+# 5c. live draft: a slow SSE stream shows the draft bubble, then the real reply replaces it
+python3 - "$HOME_DIR" <<'PY'
+import json, sys
+home = sys.argv[1]
+d = json.load(open(home + "/speak.json"))
+d["acts"][1]["payload"] = list("a draft that grows while the model writes".encode())
+json.dump(d, open(home + "/long.json", "w"))
+PY
+cp "$HOME_DIR/long.json" "$HOME_DIR/reply.json"
+echo 0.35 > "$HOME_DIR/stream_delay"
+tmux send-keys -t "$SESSION" "stream me please" Enter
+wait_for "not final" 20
+echo "ok: draft bubble shown while the model writes"
+wait_for_absent "not final" 40
+wait_for "a draft that grows while the model writes" 10
+echo "ok: the real reply replaced the draft"
+echo 0 > "$HOME_DIR/stream_delay"
+grep -q "^stream" "$HOME_DIR/stream.log" || fail "the provider was never asked to stream"
+
+# 5d. interrupt: Esc Esc stops a slow turn, F5 retries it
+cp "$HOME_DIR/speak.json" "$HOME_DIR/reply.json"
+echo 10 > "$HOME_DIR/delay"
+tmux send-keys -t "$SESSION" "a very slow question" Enter
+wait_for "esc to cancel" 10
+tmux send-keys -t "$SESSION" Escape
+wait_for "Press Esc again to interrupt" 5
+tmux send-keys -t "$SESSION" Escape
+wait_for "Interrupted." 10
+wait_for "esc to clear" 10
+echo "ok: Esc Esc interrupted the slow turn"
+echo 0 > "$HOME_DIR/delay"
+tmux send-keys -t "$SESSION" F5
+wait_for "pong smoke" 25
+echo "ok: F5 retried the interrupted turn"
+
+# 5e. Ctrl+R finds an older message; Esc restores the (empty) draft
+tmux send-keys -t "$SESSION" C-r
+tmux send-keys -t "$SESSION" "stream me"
+wait_for "(reverse-i-search) \`stream me\`"
+tmux send-keys -t "$SESSION" Escape
+wait_for_absent "(reverse-i-search)" 5
+echo "ok: Ctrl+R history search"
+
+# 5f. /export writes the chat as Markdown under <data_dir>/exports/
+tmux send-keys -t "$SESSION" "/export" Enter
+wait_for "Exported to" 10
+EXPORT_FILE="$(ls "$HOME_DIR"/data/exports/*.md | head -1)"
+[[ -f "$EXPORT_FILE" ]] || fail "no export file under $HOME_DIR/data/exports"
+grep -q "say something" "$EXPORT_FILE" || fail "export lacks the first message"
+grep -q "a draft that grows while the model writes" "$EXPORT_FILE" || fail "export lacks a reply"
+echo "ok: /export wrote $(basename "$EXPORT_FILE")"
+
 # 6. quits cleanly
 quit_tui
 echo "ok: clean quit (exit 0)"
@@ -310,6 +400,15 @@ wait_for "Attached to the gateway hosted by pid $SERVE_PID" 20
 tmux send-keys -t "$SESSION" "hello through the socket" Enter
 wait_for "pong smoke" 25
 echo "ok: attached TUI chats through serve"
+
+# the draft preview also reaches an attached TUI (preview.subscribe over the admin socket)
+cp "$HOME_DIR/long.json" "$HOME_DIR/reply.json"
+echo 0.35 > "$HOME_DIR/stream_delay"
+tmux send-keys -t "$SESSION" "stream through the socket" Enter
+wait_for "not final" 20
+wait_for_absent "not final" 40
+echo 0 > "$HOME_DIR/stream_delay"
+echo "ok: attached TUI shows the draft bubble over the socket"
 
 # 7b. governance panels against the attached daemon: /status (mode serve, the daemon pid and its
 # plugins), /approvals (nothing held), /events (the turns just recorded), /activity (no adapter

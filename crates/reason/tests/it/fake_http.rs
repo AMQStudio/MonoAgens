@@ -157,9 +157,11 @@ fn handle_conn(
     if reply.delay_ms > 0 {
         std::thread::sleep(Duration::from_millis(reply.delay_ms));
     }
+    let own_type = reply.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
     let mut head = format!(
-        "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        "HTTP/1.1 {} X\r\n{}Content-Length: {}\r\nConnection: close\r\n",
         reply.status,
+        if own_type { "" } else { "Content-Type: application/json\r\n" },
         reply.body.len()
     );
     for (k, v) in &reply.headers {

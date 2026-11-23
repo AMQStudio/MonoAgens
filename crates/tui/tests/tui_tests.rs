@@ -1477,6 +1477,8 @@ fn chat_history_persists_across_restarts_with_new_chat_default_and_short_command
     state.composer.text = "/delete".to_owned();
     state.composer.cursor = state.composer.text.len();
     state.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(state.chats.chats.len(), 2, "delete asks for confirmation first");
+    state.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     assert_eq!(state.chats.chats.len(), 1);
     assert_eq!(state.chats.active_chat().title, "Obrolan Utama");
 

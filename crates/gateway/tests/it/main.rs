@@ -7,4 +7,5 @@ mod identity_tests;
 mod multi_body_tests;
 mod ownership_tests;
 mod plugins_and_commands_tests;
+mod preview_tests;
 mod prequeue_tool_rag_tests;

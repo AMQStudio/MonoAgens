@@ -4,15 +4,22 @@
 
 pub mod attachments;
 pub mod catalog_ui;
+pub mod chat_search;
 pub mod client;
 pub mod clipboard;
+pub mod composer_history;
 pub mod config;
+pub mod conv;
+pub mod draft_preview;
 pub mod doctor;
 pub mod effects;
+pub mod graphics;
 pub mod log;
 pub mod login;
 pub mod markdown;
+pub mod message_actions;
 pub mod model_picker;
+pub mod notify;
 pub mod render;
 pub mod runtime;
 pub mod settings;

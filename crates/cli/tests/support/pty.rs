@@ -94,9 +94,10 @@ fn nz(v: u16) -> std::num::NonZeroU16 {
 /// A running binary inside a PTY with a `vt100` screen kept up to date by a reader thread.
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     parser: Arc<Mutex<vt100::Parser>>,
+    raw: Arc<Mutex<Vec<u8>>>,
     reader: Option<JoinHandle<()>>,
 }
 
@@ -126,15 +127,28 @@ impl PtySession {
         let child = pair.slave.spawn_command(cmd).expect("spawn in pty");
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
-        let writer = pair.master.take_writer().expect("take writer");
+        let writer: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(pair.master.take_writer().expect("take writer")));
+        let writer_bg = Arc::clone(&writer);
         let parser = Arc::new(Mutex::new(vt100::Parser::new(nz(rows), nz(cols), 0)));
         let parser_bg = Arc::clone(&parser);
+        let raw = Arc::new(Mutex::new(Vec::new()));
+        let raw_bg = Arc::clone(&raw);
         let handle = std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => parser_bg.lock().expect("parser").process(&buf[..n]),
+                    Ok(n) => {
+                        // A real terminal answers a cursor-position query (DSR 6); this one must too.
+                        if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+                            let mut w = writer_bg.lock().expect("writer");
+                            let _ = w.write_all(b"\x1b[1;1R");
+                            let _ = w.flush();
+                        }
+                        raw_bg.lock().expect("raw").extend_from_slice(&buf[..n]);
+                        parser_bg.lock().expect("parser").process(&buf[..n]);
+                    }
                 }
             }
         });
@@ -143,14 +157,21 @@ impl PtySession {
             writer,
             child,
             parser,
+            raw,
             reader: Some(handle),
         }
     }
 
+    /// Everything the program wrote to the terminal so far, escape sequences included.
+    pub fn raw_output(&self) -> Vec<u8> {
+        self.raw.lock().expect("raw").clone()
+    }
+
     /// Writes raw bytes (keys, escape sequences) to the terminal input.
     pub fn send_keys(&mut self, keys: &str) {
-        self.writer.write_all(keys.as_bytes()).expect("write keys");
-        self.writer.flush().expect("flush keys");
+        let mut w = self.writer.lock().expect("writer");
+        w.write_all(keys.as_bytes()).expect("write keys");
+        w.flush().expect("flush keys");
     }
 
     /// Current visible screen as text, one line per row, trailing blanks trimmed.

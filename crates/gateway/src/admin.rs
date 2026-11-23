@@ -11,7 +11,8 @@
 //! `commands.list`, `commands.run`, `approvals.resolve`, `providers.list`, `models.discover`,
 //! `providers.test`, `secrets.set` (write-only: the key is never echoed), `usage.get` and `body.attach`,
 //! plus the governance methods of `crate::governance` (`approvals.list`, `people.list`, `links.*`,
-//! `policy.get`, `events.query/explain/trace`, `activity.list`, `activity.subscribe`, `lab.*`).
+//! `policy.get`, `events.query/explain/trace`, `activity.list`, `activity.subscribe`, `lab.*`),
+//! and `preview.subscribe` / `preview.unsubscribe` (owner-only draft preview, never recorded).
 //! `body.attach` turns
 //! the connection itself into a Waist-2 body stream (the attached TUI's chat body); it is
 //! refused while another body already owns the requested id or places. Anything else answers
@@ -335,6 +336,45 @@ async fn handle_request(
                 got = rx.recv() => match got {
                     Some(cue) => {
                         if out.send(notification("cues.event", &cue)).is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+            }
+        }
+        return;
+    }
+    // Owner-only draft preview (see `crate::preview`): drafts of the TUI's own turns, pushed as
+    // `preview.event` notifications. Never recorded, never queued.
+    if method == "preview.unsubscribe" {
+        let sub = params.get("subscription").and_then(Value::as_u64);
+        match sub {
+            Some(sub) => {
+                owner.handle().preview().unsubscribe(sub);
+                if id.is_some() {
+                    let _ = out.send(ok_line(&respond_id, json!({ "ok": true })));
+                }
+            }
+            None => {
+                if id.is_some() {
+                    let _ = out.send(err_line(&respond_id, ERR_INVALID_PARAMS, "missing integer param 'subscription'"));
+                }
+            }
+        }
+        return;
+    }
+    if method == "preview.subscribe" {
+        let mut sub = owner.handle().preview().subscribe();
+        if id.is_some() {
+            let _ = out.send(ok_line(&respond_id, json!({ "subscription": sub.id() })));
+        }
+        loop {
+            tokio::select! {
+                () = out.closed() => break,
+                got = sub.recv() => match got {
+                    Some(ev) => {
+                        if out.send(notification("preview.event", &ev)).is_err() {
                             break;
                         }
                     }

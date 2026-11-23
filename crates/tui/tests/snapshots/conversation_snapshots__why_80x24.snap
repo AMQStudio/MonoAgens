@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/conversation_snapshots.rs
+expression: a
+---
+                                                           Explain the valve   │
+                                                                               │
+ The valve checks every action.                                                │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+      Why: event #6                                                            │
+                                                                               │
+     decision event=7 target=6 outcome=Go salience=0.900000 threshold=0.500    │
+       door_verdict door=action rule=allow reason_tag=ok                       │
+                                                                               │
+     Esc close                                                                 │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+ ● gpt-4o-mini · ◆  Valve: enforcing ── 0% · »  New Chat
+────────────────────────────────────────────────────────────────────────────────
+ >  Message Mono or type / for commands…
+────────────────────────────────────────────────────────────────────────────────
+ esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar …

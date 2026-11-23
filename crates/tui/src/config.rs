@@ -213,6 +213,9 @@ pub struct TuiPreferences {
     pub show_valve_badge: bool,
     #[serde(default = "default_autocomplete_limit")]
     pub autocomplete_limit: usize,
+    /// Conversation settings (`tui-conversation`): notifications and live draft preview.
+    #[serde(default)]
+    pub conv: crate::notify::ConvPrefs,
 }
 
 impl Default for TuiPreferences {
@@ -234,6 +237,7 @@ impl Default for TuiPreferences {
             show_cost_estimate: true,
             show_valve_badge: true,
             autocomplete_limit: 10,
+            conv: crate::notify::ConvPrefs::default(),
         }
     }
 }
@@ -305,9 +309,41 @@ pub struct LocalChatEntry {
     pub last_topic_summary: String,
     #[serde(default)]
     pub messages: Vec<StoredChatMessagePreview>,
+    /// Pinned chats sort first in the sidebar (additive, absent in older files).
+    #[serde(default)]
+    pub pinned: bool,
+    /// Running mean of the user-message embeddings of this chat, in millionths (the topic
+    /// centroid for embedder-based topic-shift detection; empty without an embedder).
+    #[serde(default)]
+    pub topic_centroid_micros: Vec<i32>,
 }
 
 impl LocalChatEntry {
+    /// The stored topic centroid as floats (`None` when there is none).
+    #[must_use]
+    pub fn topic_centroid(&self) -> Option<Vec<f32>> {
+        (!self.topic_centroid_micros.is_empty())
+            .then(|| self.topic_centroid_micros.iter().map(|m| *m as f32 / 1_000_000.0).collect())
+    }
+
+    /// Folds `embedding` into the stored centroid (running mean over `turns` user messages).
+    pub fn update_topic_centroid(&mut self, embedding: &[f32], turns: u32) {
+        if embedding.is_empty() {
+            return;
+        }
+        let n = f64::from(turns.max(1));
+        let prev = self.topic_centroid();
+        let merged: Vec<f32> = match prev {
+            Some(p) if p.len() == embedding.len() && turns > 1 => p
+                .iter()
+                .zip(embedding)
+                .map(|(a, b)| ((f64::from(*a) * (n - 1.0) + f64::from(*b)) / n) as f32)
+                .collect(),
+            _ => embedding.to_vec(),
+        };
+        self.topic_centroid_micros = merged.iter().map(|v| (v * 1_000_000.0).round() as i32).collect();
+    }
+
     /// Default seeded initial chat (`New Chat`) mapped to `cli:terminal`.
     #[must_use]
     pub fn direct_default() -> Self {
@@ -320,6 +356,8 @@ impl LocalChatEntry {
             topic_ngrams: Vec::new(),
             last_topic_summary: String::new(),
             messages: Vec::new(),
+            pinned: false,
+            topic_centroid_micros: Vec::new(),
         }
     }
 }
@@ -444,6 +482,8 @@ impl LocalChatStore {
             topic_ngrams: Vec::new(),
             last_topic_summary: String::new(),
             messages: Vec::new(),
+            pinned: false,
+            topic_centroid_micros: Vec::new(),
         };
         self.chats.push(entry);
         self.active_chat_id = id;

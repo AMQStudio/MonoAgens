@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/conversation_snapshots.rs
+expression: a
+---
+                                                           Explain the valve   │
+                                                                               │
+ The valve checks every action.                                                │
+                                                                               │
+                                                               next question   │
+                                                                               │
+ draft ┄ not final, the valve has not seen it yet                              │
+ ┆ Halo, ini draft balasan yang sedang ditulis model                           │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+ Press Esc again to interrupt                                                  │
+   Reasoning…
+ ⠋ 0s › gpt-4o-mini · ◆  Valve: enforcing ── 0% · »  New Chat
+────────────────────────────────────────────────────────────────────────────────
+ >  Message Mono or type / for commands…
+────────────────────────────────────────────────────────────────────────────────
+ esc to cancel · enter send · shift+enter newline · / commands · ctrl+b sidebar…

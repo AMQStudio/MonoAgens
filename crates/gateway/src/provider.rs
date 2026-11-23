@@ -489,6 +489,10 @@ struct InFlightCall {
 }
 
 impl InFlightCall {
+    fn is_claimed(&self) -> bool {
+        self.claimed.load(Ordering::Acquire)
+    }
+
     fn try_claim(&self) -> bool {
         self.claimed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -624,6 +628,7 @@ pub struct GatewayModelExecutor {
     cues: CueRecorder,
     clock: Arc<dyn Clock>,
     turns: TurnRegistry,
+    preview: crate::preview::PreviewHub,
 }
 
 impl GatewayModelExecutor {
@@ -664,7 +669,14 @@ impl GatewayModelExecutor {
             cues,
             clock,
             turns: TurnRegistry::default(),
+            preview: crate::preview::PreviewHub::default(),
         }
+    }
+
+    /// The owner-only draft preview hub (see [`crate::preview`]).
+    #[must_use]
+    pub fn preview(&self) -> &crate::preview::PreviewHub {
+        &self.preview
     }
 
     /// Returns the swappable provider routes (shared with the gateway handle).
@@ -720,6 +732,17 @@ impl GatewayModelExecutor {
                 )
             });
         req.temperature = self.temperature;
+        // A draft preview is only ever offered for a reasoning call triggered at the TUI's own
+        // place while a TUI listens; nothing else is allowed to stream.
+        if purpose == ModelPurpose::Reason
+            && self.preview.is_active()
+            && plan
+                .place
+                .as_ref()
+                .is_some_and(|p| p.as_str() == self.preview.place())
+        {
+            self.preview.mark_eligible(request_id.as_u64());
+        }
         req
     }
 
@@ -784,9 +807,42 @@ impl GatewayModelExecutor {
         let clock = Arc::clone(&self.clock);
         // The blocking HTTP call cannot be interrupted; on cancel/timeout it is abandoned and
         // finishes on its own thread, where losing the claim means its result is dropped.
+        let preview = (purpose == ModelPurpose::Reason
+            && self.preview.take_eligible(request_id.as_u64())
+            && self.preview.is_active())
+        .then(|| self.preview.clone());
         let _detached = tokio::task::spawn_blocking(move || {
-            let outcome = provider.invoke(&req);
-            if call_for_worker.try_claim() {
+            let outcome = match &preview {
+                Some(hub) => {
+                    let id = call_for_worker.request_id.as_u64();
+                    let mut extractor = crate::preview::DraftExtractor::new(hub.place());
+                    let call = Arc::clone(&call_for_worker);
+                    let mut sink = |delta: &str| {
+                        // A call the owner already cancelled (or that timed out) shows nothing more.
+                        if call.is_claimed() {
+                            return;
+                        }
+                        if let Some(text) = extractor.push(delta) {
+                            hub.publish(&crate::preview::PreviewEvent::Draft { request_id: id, text });
+                        }
+                    };
+                    provider.invoke_streaming(&req, &mut sink)
+                }
+                None => provider.invoke(&req),
+            };
+            let won = call_for_worker.try_claim();
+            if let Some(hub) = &preview {
+                let end = match (&outcome, won) {
+                    (_, false) => crate::preview::PreviewEnd::Cancelled,
+                    (Ok(_), true) => crate::preview::PreviewEnd::Completed,
+                    (Err(_), true) => crate::preview::PreviewEnd::Failed,
+                };
+                hub.publish(&crate::preview::PreviewEvent::End {
+                    request_id: call_for_worker.request_id.as_u64(),
+                    outcome: end,
+                });
+            }
+            if won {
                 let _ = res_tx.send(outcome);
             } else {
                 diagnostics.log(

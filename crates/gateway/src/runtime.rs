@@ -263,6 +263,7 @@ pub struct GatewayHandle {
     shutdown_grace_ms: u64,
     turns: TurnRegistry,
     live_model: LiveModel,
+    preview: crate::preview::PreviewHub,
 }
 
 impl GatewayHandle {
@@ -557,6 +558,12 @@ impl GatewayHandle {
             .len()
     }
 
+    /// The owner-only draft preview hub: the TUI subscribes here (never an adapter or body).
+    #[must_use]
+    pub fn preview(&self) -> &crate::preview::PreviewHub {
+        &self.preview
+    }
+
     /// The swappable provider routes (main and per-purpose) of this gateway.
     #[must_use]
     pub fn live_model(&self) -> &LiveModel {
@@ -699,6 +706,7 @@ impl GatewayRuntime {
 
         let turns = model_exec.turns().clone();
         let live_model = model_exec.live_model().clone();
+        let preview = model_exec.preview().clone();
         let seams_for_handle = options.seams.clone();
         let pre_queue_for_owner = options.seams.pre_queue_service.clone();
         let ingress = IngressQueue::new();
@@ -751,6 +759,7 @@ impl GatewayRuntime {
             shutdown_grace_ms: config.runtime.body_shutdown_grace_ms,
             turns,
             live_model,
+            preview,
         };
 
         Ok(Self {
