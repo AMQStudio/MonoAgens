@@ -1,5 +1,5 @@
 //! Phase-3 `body-sim-actuator`: pure simulation body exposing continuous/physical capabilities
-//! (`sim.move`, `sim.stop`) with declared `(channel, window_ms, noise, delta_pred)` effects,
+//! (`sim.move`, `sim.reset`, `sim.stop`) with declared `(channel, window_ms, noise, delta_pred)` effects,
 //! Option A cancellation receipts, and simulated sensor percepts answering predictions.
 
 #![forbid(unsafe_code)]
@@ -57,7 +57,7 @@ impl Default for SimActuatorState {
     }
 }
 
-/// Pure simulation Waist-2 body implementing `sim.move` and `sim.stop`.
+/// Pure simulation Waist-2 body implementing `sim.move`, `sim.reset`, and `sim.stop`.
 pub struct SimActuatorBody {
     body_id: BodyId,
     place: PlaceId,
@@ -334,6 +334,7 @@ impl BodyHandler for SimActuatorBody {
         }
 
         if params.capability_id.as_str() == "sim.reset" {
+            let prev_pos = self.state.position;
             self.state.position = 0.0;
             self.state.velocity = 0.0;
             self.state.stopped = true;
@@ -341,7 +342,7 @@ impl BodyHandler for SimActuatorBody {
                 &params.action_id,
                 params.audience,
                 "sim:encoder:position",
-                0.0,
+                -prev_pos,
                 0.0,
             );
             let receipt = make_terminal_receipt(
@@ -352,7 +353,7 @@ impl BodyHandler for SimActuatorBody {
                 Some("position reset to 0".to_owned()),
                 Some(TerminationReason::Normal),
                 Some(1.0),
-                Some(0),
+                Some(1),
                 params.h_act,
                 now,
             );
