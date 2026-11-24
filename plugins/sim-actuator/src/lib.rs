@@ -1,5 +1,5 @@
 //! Phase-3 `body-sim-actuator`: pure simulation body exposing continuous/physical capabilities
-//! (`sim.move`, `sim.stop`) with declared `(channel, window_ms, noise, delta_pred)` effects,
+//! (`sim.move`, `sim.reset`, `sim.stop`) with declared `(channel, window_ms, noise, delta_pred)` effects,
 //! Option A cancellation receipts, and simulated sensor percepts answering predictions.
 
 #![forbid(unsafe_code)]
@@ -57,7 +57,7 @@ impl Default for SimActuatorState {
     }
 }
 
-/// Pure simulation Waist-2 body implementing `sim.move` and `sim.stop`.
+/// Pure simulation Waist-2 body implementing `sim.move`, `sim.reset`, and `sim.stop`.
 pub struct SimActuatorBody {
     body_id: BodyId,
     place: PlaceId,
@@ -167,6 +167,28 @@ impl SimActuatorBody {
                     delta_pred: -1.0,
                 }),
             },
+            CapabilityDescriptor {
+                id: CapabilityId::new("sim.reset"),
+                description: "Reset simulated actuator position to zero".to_owned(),
+                places: vec![self.place.clone()],
+                flags: CapabilityFlags {
+                    communicative: false,
+                    identity_changing: false,
+                    irreversible: false,
+                },
+                typical_latency_ms: 10,
+                capability_schema_hash: capability_schema_hash(&json!({
+                    "capability": "sim.reset",
+                    "type": "object",
+                    "properties": {}
+                })),
+                sensed_effect: Some(SensedEffect {
+                    channel: ChannelId::new("sim:encoder:position"),
+                    window_ms: 50,
+                    noise: 0.0,
+                    delta_pred: 0.0,
+                }),
+            },
         ];
         sort_capabilities(&mut caps);
         caps
@@ -237,7 +259,10 @@ impl BodyHandler for SimActuatorBody {
         if params.audience.is_empty() {
             return Err(Waist2Error::undeclared_audience());
         }
-        let known = matches!(params.capability_id.as_str(), "sim.move" | "sim.stop");
+        let known = matches!(
+            params.capability_id.as_str(),
+            "sim.move" | "sim.stop" | "sim.reset"
+        );
         if !known {
             return Err(Waist2Error::unknown_capability(&params.capability_id));
         }
@@ -296,6 +321,36 @@ impl BodyHandler for SimActuatorBody {
                 ReceiptOutcome::Done,
                 None,
                 Some("actuator halted".to_owned()),
+                Some(TerminationReason::Normal),
+                Some(1.0),
+                Some(1),
+                params.h_act,
+                now,
+            );
+            return Ok(ActionExecuteResult {
+                accepted: true,
+                receipt: Some(receipt),
+            });
+        }
+
+        if params.capability_id.as_str() == "sim.reset" {
+            let prev_pos = self.state.position;
+            self.state.position = 0.0;
+            self.state.velocity = 0.0;
+            self.state.stopped = true;
+            self.record_sensor_percept(
+                &params.action_id,
+                params.audience,
+                "sim:encoder:position",
+                -prev_pos,
+                0.0,
+            );
+            let receipt = make_terminal_receipt(
+                params.action_id,
+                params.capability_id,
+                ReceiptOutcome::Done,
+                None,
+                Some("position reset to 0".to_owned()),
                 Some(TerminationReason::Normal),
                 Some(1.0),
                 Some(1),
